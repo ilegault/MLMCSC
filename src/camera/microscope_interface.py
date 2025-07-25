@@ -16,6 +16,19 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Import camera detector
+try:
+    from .camera_detector import CameraDetector
+except ImportError:
+    # Fallback if camera_detector is not available
+    class CameraDetector:
+        @staticmethod
+        def get_best_microscope_device_id():
+            return None
+        @staticmethod
+        def scan_cameras():
+            return []
+
 
 class MicroscopeCapture:
     """
@@ -71,6 +84,50 @@ class MicroscopeCapture:
         self.calibration_file.parent.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"MicroscopeCapture initialized for device {device_id}")
+    
+    @classmethod
+    def auto_detect_microscope(cls, target_fps: int = 30, resolution: Tuple[int, int] = (1920, 1080)) -> Optional['MicroscopeCapture']:
+        """
+        Automatically detect and connect to the best available microscope camera.
+        
+        Args:
+            target_fps: Target frame rate
+            resolution: Desired resolution
+            
+        Returns:
+            MicroscopeCapture instance connected to microscope, or None if not found
+        """
+        logger.info("Auto-detecting microscope cameras...")
+        
+        # Try to find the best microscope camera
+        best_device_id = CameraDetector.get_best_microscope_device_id()
+        
+        if best_device_id is not None:
+            logger.info(f"Found potential microscope on device {best_device_id}")
+            microscope = cls(device_id=best_device_id, target_fps=target_fps, resolution=resolution)
+            
+            if microscope.connect():
+                logger.info("Successfully connected to auto-detected microscope")
+                return microscope
+            else:
+                logger.warning("Failed to connect to auto-detected microscope")
+        
+        # Fallback: try common microscope device IDs
+        logger.info("Trying common microscope device IDs...")
+        for device_id in [1, 2, 3, 4, 5]:  # Skip 0 (usually built-in camera)
+            try:
+                microscope = cls(device_id=device_id, target_fps=target_fps, resolution=resolution)
+                if microscope.connect():
+                    logger.info(f"Successfully connected to microscope on device {device_id}")
+                    return microscope
+                else:
+                    microscope.disconnect()
+            except Exception as e:
+                logger.debug(f"Device {device_id} failed: {e}")
+                continue
+        
+        logger.error("No microscope cameras found")
+        return None
     
     def connect(self) -> bool:
         """

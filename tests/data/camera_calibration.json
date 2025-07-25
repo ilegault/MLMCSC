@@ -1,0 +1,29 @@
+{
+  "device_id": 1,
+  "resolution": [
+    1280,
+    720
+  ],
+  "target_fps": 30,
+  "settings": {
+    "brightness": 0.7,
+    "contrast": 0.8,
+    "saturation": 0.6,
+    "hue": 0.5,
+    "gain": 0.5,
+    "exposure": -1,
+    "focus": -1,
+    "white_balance": -1
+  },
+  "timestamp": 1753470962.2627401,
+  "opencv_properties": {
+    "10": 0.0,
+    "11": 0.0,
+    "12": 0.0,
+    "13": 128.0,
+    "14": 128.0,
+    "15": -14.0,
+    "28": 0.0,
+    "17": 128.0
+  }
+}
