@@ -133,7 +133,7 @@ class BasicObjectDetectionTest:
                     logger.info(f"  {status} {setting}: {settings[setting]}")
             
             # Save test frame
-            test_frame_path = "test_camera_frame.jpg"
+            test_frame_path = "data/test_camera_frame.jpg"
             cv2.imwrite(test_frame_path, frame)
             logger.info(f"✅ Saved test frame: {test_frame_path}")
             
@@ -232,7 +232,7 @@ class BasicObjectDetectionTest:
                     time.sleep(self.frame_delay)
             
             # Save all results
-            results_filename = "detection_test_results.json"
+            results_filename = "data/detection_test_results.json"
             with open(results_filename, 'w') as f:
                 json.dump({
                     'test_timestamp': time.time(),

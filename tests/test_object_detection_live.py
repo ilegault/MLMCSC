@@ -28,8 +28,8 @@ from typing import Optional, List, Dict, Any
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 try:
-    from models.object_detector import SpecimenDetector, DetectionResult
-    from camera.microscope_interface import MicroscopeCapture
+    from src.models.object_detector import SpecimenDetector, DetectionResult
+    from src.camera.microscope_interface import MicroscopeCapture
     IMPORTS_AVAILABLE = True
 except ImportError as e:
     print(f"Error importing modules: {e}")
