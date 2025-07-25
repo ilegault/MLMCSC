@@ -1,0 +1,83 @@
+# Ignore ALL .idea directories at any level
+**/.idea/
+.idea/
+
+# Ignore ALL __pycache__ directories at any level
+**/__pycache__/
+__pycache__/
+
+# Python compiled files
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments at any level
+**/venv/
+**/env/
+**/ENV/
+**/env.bak/
+**/venv.bak/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment files
+**/.env
+.env
+
+# OS files
+**/.DS_Store
+.DS_Store
+**/Thumbs.db
+Thumbs.db
+
+# Build directories
+**/build/
+**/dist/
+build/
+dist/
+
+# Python egg files
+**/*.egg-info/
+*.egg-info/
+
+# Coverage reports
+**/htmlcov/
+htmlcov/
+**/.coverage
+.coverage
+
+# pytest cache
+**/.pytest_cache/
+.pytest_cache/
+
+# mypy cache
+**/.mypy_cache/
+.mypy_cache/
+
+# Jupyter Notebook checkpoints
+**/.ipynb_checkpoints
+.ipynb_checkpoints
+
+# VS Code
+**/.vscode/
+.vscode/
+
+# Project-specific ignores
+**/debug_output/
+debug_output/
+**/*.log
+*.log
+**/*.tmp
+*.tmp
+
+# Ignore specific problematic projects (if needed)
+# Uncomment and modify as needed:
+# FourthProject/
+# SecondProject/
+# ThirdProject/
