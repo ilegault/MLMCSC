@@ -75,9 +75,3 @@ debug_output/
 *.log
 **/*.tmp
 *.tmp
-
-# Ignore specific problematic projects (if needed)
-# Uncomment and modify as needed:
-# FourthProject/
-# SecondProject/
-# ThirdProject/
