@@ -196,7 +196,6 @@ def main():
     print(f"\n✅ Next steps:")
     print("   1. Use an annotation tool (labelImg, CVAT, Roboflow)")
     print("   2. Start by adding Class 1 (notch) annotations")
-    print("   3. Run improved_charpy_training.py to retrain")
     print("   4. Gradually add more classes as needed")
 
 if __name__ == "__main__":
