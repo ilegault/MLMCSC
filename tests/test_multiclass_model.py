@@ -235,7 +235,7 @@ def main():
     print("=" * 50)
     
     # Default paths - update these based on your setup
-    model_path = "C:/Users/IGLeg/PycharmProjects/MLMCSC/tests/models/charpy_final/with_measurement_edges/weights/best.pt"
+    model_path = "C:/Users/IGLeg/PycharmProjects/MLMCSC/tests/models/charpy_final/charpy_v9/weights/best.pt"
     test_images_dir = "C:/Users/IGLeg/PycharmProjects/MLMCSC/tests/data/charpy_dataset/images/test"
     test_labels_dir = "C:/Users/IGLeg/PycharmProjects/MLMCSC/tests/data/charpy_dataset/labels/test"
     
