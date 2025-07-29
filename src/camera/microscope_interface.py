@@ -208,7 +208,7 @@ class MicroscopeCapture:
         
         try:
             ret, frame = self.cap.read()
-            if ret and frame is not None:
+            if ret and frame is not None and frame.size > 0:
                 logger.debug("Frame captured successfully")
                 return frame
             else:
