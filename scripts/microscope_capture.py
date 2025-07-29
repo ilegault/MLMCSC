@@ -29,7 +29,7 @@ import threading
 class CharpyPhotoCaptureSystem:
     """Systematic photo capture system for Charpy specimens."""
 
-    def __init__(self, device_id=1, output_dir="data/charpy_training_v2"):
+    def __init__(self, device_id=1, output_dir="data/charpy_dataset_v2"):
         """
         Initialize the capture system.
 
@@ -37,7 +37,7 @@ class CharpyPhotoCaptureSystem:
             device_id: Camera device ID (1 for your microscope)
             output_dir: Directory to save captured photos
         """
-        self.device_id = device_reid
+        self.device_id = device_id
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -656,7 +656,7 @@ def main():
     # Initialize capture system
     capture_system = CharpyPhotoCaptureSystem(
         device_id=1,  # Your microscope camera
-        output_dir="data/charpy_training_v2"
+        output_dir="../data/datasets/charpy_dataset_v2"
     )
 
     print("🔧 Setup Tips:")

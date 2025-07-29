@@ -46,7 +46,7 @@ def main():
     print("=" * 50)
     
     # Analyze each split
-    base_dir = "C:/Users/IGLeg/PycharmProjects/MLMCSC/tests"
+    base_dir = "/tests"
     for split in ['train', 'val', 'test']:
         labels_dir = f"{base_dir}/data/charpy_dataset/labels/{split}"
         if os.path.exists(labels_dir):
