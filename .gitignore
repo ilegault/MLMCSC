@@ -75,3 +75,92 @@ debug_output/
 *.log
 **/*.tmp
 *.tmp
+
+# Machine Learning specific files
+# Model weights and checkpoints
+**/*.pt
+*.pt
+**/*.pth
+*.pth
+**/*.ckpt
+*.ckpt
+**/*.h5
+*.h5
+**/*.pkl
+*.pkl
+**/*.pickle
+*.pickle
+
+# Dataset images (keep only essential ones in version control)
+**/data/datasets/**/images/
+**/data/datasets/**/labels/
+data/datasets/**/images/
+data/datasets/**/labels/
+
+# Model training outputs
+**/models/*/weights/
+**/models/*/results.csv
+**/models/*/results.png
+**/models/*/*.jpg
+**/models/*/*.png
+**/models/*/confusion_matrix*.png
+**/models/*/BoxF1_curve.png
+**/models/*/BoxPR_curve.png
+**/models/*/BoxP_curve.png
+**/models/*/BoxR_curve.png
+**/models/*/train_batch*.jpg
+**/models/*/val_batch*.jpg
+**/models/*/labels.jpg
+**/models/*/predictions.json
+models/*/weights/
+models/*/results.csv
+models/*/results.png
+models/*/*.jpg
+models/*/*.png
+models/*/confusion_matrix*.png
+models/*/BoxF1_curve.png
+models/*/BoxPR_curve.png
+models/*/BoxP_curve.png
+models/*/BoxR_curve.png
+models/*/train_batch*.jpg
+models/*/val_batch*.jpg
+models/*/labels.jpg
+models/*/predictions.json
+
+# Results and analysis outputs
+**/results/analysis/
+**/results/**/
+results/analysis/
+results/**/
+
+# Large model files
+yolov8*.pt
+**/yolov8*.pt
+
+# Temporary detection outputs
+charpy_detection_*.jpg
+charpy_detection_*.json
+**/charpy_detection_*.jpg
+**/charpy_detection_*.json
+
+# Additional dataset and capture files
+**/capture_session_*.json
+**/charpy_s*_p*_*.json
+capture_session_*.json
+charpy_s*_p*_*.json
+
+# Additional model files
+**/*.onnx
+*.onnx
+**/*.torchscript
+*.torchscript
+**/labels_correlogram.jpg
+labels_correlogram.jpg
+**/*_inference.py
+*_inference.py
+**/*_training_summary.json
+*_training_summary.json
+**/*_validation_metrics.json
+*_validation_metrics.json
+**/dataset_stats.json
+dataset_stats.json
