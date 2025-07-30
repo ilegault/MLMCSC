@@ -12,9 +12,6 @@ Features:
 - Continuous percentage prediction with confidence intervals
 - Real-time microscope integration
 - Comprehensive analysis reporting
-
-Author: AI Assistant
-Version: 2.0
 """
 
 import cv2
@@ -373,6 +370,12 @@ class ShearFeatureExtractor:
         self.lbp_n_points = 24
         logger.info("ShearFeatureExtractor initialized")
 
+    def _validate_feature_value(self, value: float, default: float = 0.0) -> float:
+        """Validate and clean a feature value."""
+        if np.isnan(value) or np.isinf(value):
+            return default
+        return float(value)
+
     def extract_features(self, surface: np.ndarray) -> ShearFeatures:
         """
         Extract all features from a fracture surface.
@@ -397,40 +400,40 @@ class ShearFeatureExtractor:
 
         return ShearFeatures(
             # GLCM features
-            contrast=glcm_features['contrast'],
-            dissimilarity=glcm_features['dissimilarity'],
-            homogeneity=glcm_features['homogeneity'],
-            energy=glcm_features['energy'],
-            correlation=glcm_features['correlation'],
-            asm=glcm_features['asm'],
+            contrast=self._validate_feature_value(glcm_features['contrast'], 0.0),
+            dissimilarity=self._validate_feature_value(glcm_features['dissimilarity'], 0.0),
+            homogeneity=self._validate_feature_value(glcm_features['homogeneity'], 0.5),
+            energy=self._validate_feature_value(glcm_features['energy'], 0.5),
+            correlation=self._validate_feature_value(glcm_features['correlation'], 0.0),
+            asm=self._validate_feature_value(glcm_features['asm'], 0.5),
 
             # LBP features
-            lbp_uniformity=lbp_features['uniformity'],
-            lbp_contrast=lbp_features['contrast'],
-            lbp_dissimilarity=lbp_features['dissimilarity'],
+            lbp_uniformity=self._validate_feature_value(lbp_features['uniformity'], 0.5),
+            lbp_contrast=self._validate_feature_value(lbp_features['contrast'], 0.0),
+            lbp_dissimilarity=self._validate_feature_value(lbp_features['dissimilarity'], 0.0),
 
             # Morphological features
-            roughness=morph_features['roughness'],
-            surface_area_ratio=morph_features['surface_area_ratio'],
-            fractal_dimension=morph_features['fractal_dimension'],
+            roughness=self._validate_feature_value(morph_features['roughness'], 1.0),
+            surface_area_ratio=self._validate_feature_value(morph_features['surface_area_ratio'], 1.0),
+            fractal_dimension=self._validate_feature_value(morph_features['fractal_dimension'], 2.0),
 
             # Intensity features
-            mean_intensity=intensity_features['mean'],
-            std_intensity=intensity_features['std'],
-            skewness=intensity_features['skewness'],
-            kurtosis=intensity_features['kurtosis'],
+            mean_intensity=self._validate_feature_value(intensity_features['mean'], 128.0),
+            std_intensity=self._validate_feature_value(intensity_features['std'], 50.0),
+            skewness=self._validate_feature_value(intensity_features['skewness'], 0.0),
+            kurtosis=self._validate_feature_value(intensity_features['kurtosis'], 3.0),
 
             # Gradient features
-            gradient_magnitude=gradient_features['magnitude'],
-            gradient_direction_std=gradient_features['direction_std'],
+            gradient_magnitude=self._validate_feature_value(gradient_features['magnitude'], 10.0),
+            gradient_direction_std=self._validate_feature_value(gradient_features['direction_std'], 1.0),
 
             # Edge features
-            edge_density=edge_features['density'],
-            edge_strength=edge_features['strength'],
+            edge_density=self._validate_feature_value(edge_features['density'], 0.1),
+            edge_strength=self._validate_feature_value(edge_features['strength'], 10.0),
 
             # Regional features
-            smooth_regions_ratio=regional_features['smooth_ratio'],
-            rough_regions_ratio=regional_features['rough_ratio']
+            smooth_regions_ratio=self._validate_feature_value(regional_features['smooth_ratio'], 0.5),
+            rough_regions_ratio=self._validate_feature_value(regional_features['rough_ratio'], 0.5)
         )
 
     def _extract_glcm_features(self, surface: np.ndarray) -> Dict[str, float]:
@@ -914,6 +917,34 @@ class ShearRegressor:
         self.X_train = np.array(X_features)
         self.y_train = np.array(y_labels)
 
+        # Check for NaN or infinite values
+        nan_mask = np.isnan(self.X_train).any(axis=1)
+        inf_mask = np.isinf(self.X_train).any(axis=1)
+        invalid_mask = nan_mask | inf_mask
+        
+        # Ensure invalid_mask is a numpy array
+        invalid_mask = np.asarray(invalid_mask)
+        
+        if np.any(invalid_mask):
+            logger.warning(f"Found {np.sum(invalid_mask)} samples with NaN or infinite values, removing them...")
+            valid_mask = ~invalid_mask
+            self.X_train = self.X_train[valid_mask]
+            self.y_train = self.y_train[valid_mask]
+        
+        # Check for NaN in labels
+        label_nan_mask = np.isnan(self.y_train)
+        # Ensure label_nan_mask is a numpy array
+        label_nan_mask = np.asarray(label_nan_mask)
+        
+        if np.any(label_nan_mask):
+            logger.warning(f"Found {np.sum(label_nan_mask)} samples with NaN labels, removing them...")
+            valid_label_mask = ~label_nan_mask
+            self.X_train = self.X_train[valid_label_mask]
+            self.y_train = self.y_train[valid_label_mask]
+
+        if self.X_train.shape[0] == 0:
+            raise ValueError("No valid samples remaining after removing NaN/infinite values")
+
         logger.info(f"Training data prepared: {self.X_train.shape[0]} samples, {self.X_train.shape[1]} features")
         logger.info(f"Shear range: {np.min(self.y_train):.1f}% - {np.max(self.y_train):.1f}%")
 
@@ -929,12 +960,16 @@ class ShearRegressor:
 
         # Perform cross-validation with MAE scoring
         try:
+            # Ensure we have enough samples for cross-validation
+            n_samples = self.X_train.shape[0]
+            cv_folds = min(5, max(2, n_samples // 10))  # At least 2 folds, at most 5
+            
             cv_scores = cross_val_score(self.model, self.X_train, self.y_train,
-                                        cv=min(5, len(self.y_train)), scoring='neg_mean_absolute_error')
+                                        cv=cv_folds, scoring='neg_mean_absolute_error')
             self.cross_val_scores = -cv_scores  # Convert back to positive MAE
         except Exception as e:
             logger.warning(f"Cross-validation failed: {e}")
-            self.cross_val_scores = []
+            self.cross_val_scores = np.array([])
 
         # Train on full dataset
         self.model.fit(self.X_train, self.y_train)
@@ -949,9 +984,9 @@ class ShearRegressor:
         results = {
             'training_mae': self.training_mae,
             'training_r2': self.training_r2,
-            'cv_mae_mean': np.mean(self.cross_val_scores) if self.cross_val_scores else 0.0,
-            'cv_mae_std': np.std(self.cross_val_scores) if self.cross_val_scores else 0.0,
-            'cv_scores': self.cross_val_scores.tolist() if self.cross_val_scores else [],
+            'cv_mae_mean': np.mean(self.cross_val_scores) if len(self.cross_val_scores) > 0 else 0.0,
+            'cv_mae_std': np.std(self.cross_val_scores) if len(self.cross_val_scores) > 0 else 0.0,
+            'cv_scores': self.cross_val_scores.tolist() if len(self.cross_val_scores) > 0 else [],
             'n_samples': self.X_train.shape[0],
             'n_features': self.X_train.shape[1],
             'shear_range': {
@@ -965,7 +1000,7 @@ class ShearRegressor:
         logger.info(f"Training completed!")
         logger.info(f"Training MAE: {self.training_mae:.2f}%")
         logger.info(f"Training R²: {self.training_r2:.3f}")
-        if self.cross_val_scores:
+        if len(self.cross_val_scores) > 0:
             logger.info(
                 f"Cross-validation MAE: {np.mean(self.cross_val_scores):.2f} ± {np.std(self.cross_val_scores):.2f}%")
 

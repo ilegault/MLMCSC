@@ -172,3 +172,77 @@ labels_correlogram.jpg
 *_validation_metrics.json
 **/dataset_stats.json
 dataset_stats.json
+
+# ============================================
+# COMPREHENSIVE FILE TYPE EXCLUSIONS
+# ============================================
+
+# Image files (JPG, JPEG, PNG, etc.) - Global exclusion with exceptions
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.png
+*.PNG
+*.gif
+*.GIF
+*.bmp
+*.BMP
+*.tiff
+*.TIFF
+*.webp
+*.WEBP
+*.svg
+*.SVG
+
+# Text files - Global exclusion with exceptions
+*.txt
+*.TXT
+
+# JSON files - Global exclusion with exceptions  
+*.json
+*.JSON
+
+# Cache and temporary files
+*.cache
+*.CACHE
+*.tmp
+*.TMP
+*.temp
+*.TEMP
+*.bak
+*.BAK
+*.swp
+*.swo
+*~
+
+# Additional cache directories
+**/cache/
+cache/
+**/.cache/
+.cache/
+**/tmp/
+tmp/
+**/temp/
+temp/
+
+# ============================================
+# EXCEPTIONS - Files you DO want to track
+# ============================================
+# Uncomment and modify these lines for files you want to keep in version control:
+
+# Essential configuration files (uncomment if needed)
+# !requirements.txt
+# !package.json
+# !config.json
+# !settings.json
+
+# Essential documentation images (uncomment if needed)
+# !docs/**/*.jpg
+# !docs/**/*.png
+# !README_images/*.jpg
+# !README_images/*.png
+
+# Essential data files (uncomment if needed)
+# !data/essential_config.json
+# !data/sample_data.txt

@@ -1,600 +1,403 @@
 #!/usr/bin/env python3
 """
-Calibrated Measurement System for Charpy Specimens
+Standalone Microscope Calibrator System
 
-This script uses your calibrated microscope to make accurate measurements.
-It includes measurement logging and integration with your detection model
-for automated measurements.
+Simple calibration tool for microscope on device ID 1.
+Creates calibration data that can be used by other measurement tools.
 
 Features:
-- Load calibration
-- Interactive measurement tools
-- Automated measurements from detection results
-- Measurement logging and export
+- Connect to microscope on device ID 1
+- Interactive calibration using known reference objects
+- Save/load calibration data
+- Quick measurement verification
+
+Usage:
+    python microscope_calibrator.py
 """
 
 import cv2
 import numpy as np
 import json
 import time
-import sys
-import logging
+import math
 from pathlib import Path
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from PIL import Image, ImageTk
-import pandas as pd
-
-# Add project root to path for imports
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
-try:
-    from src.camera.microscope_interface import MicroscopeCapture
-    from src.models.object_detector import SpecimenDetector
-except ImportError:
-    print("Required modules not found. Make sure you're running from the project root.")
-    sys.exit(1)
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
-class CalibratedMeasurementSystem:
-    """Measurement system using calibrated microscope."""
+class MicroscopeCalibrator:
+    """Standalone microscope calibrator for device ID 1."""
 
     def __init__(self):
-        """Initialize measurement system."""
-        self.device_id = 1  # Fixed device ID
-        self.microscope = None
-        self.detector = None
+        """Initialize calibrator."""
+        self.device_id = 1
+        self.cap = None
 
-        # Default calibration values (you can adjust these based on your microscope)
-        self.pixel_scale = 100.0  # pixels per mm (default value)
-        self.mm_per_pixel = 0.01  # mm per pixel
-        self.calibration_error = 0.001  # mm (default accuracy)
-        self.calibration_date = datetime.now().isoformat()
+        # Calibration data
+        self.pixel_scale = None  # pixels per mm
+        self.mm_per_pixel = None
+        self.calibration_error = None
+        self.reference_distance_mm = None
+        self.reference_distance_pixels = None
 
-        # Measurement history
-        self.measurements = []
-        self.session_start = time.time()
+        # Calibration file
+        self.calibration_file = Path("data/microscope_calibration.json")
+        self.calibration_file.parent.mkdir(parents=True, exist_ok=True)
 
-        print("📏 Calibrated Measurement System Initialized")
-        print(f"   Using default calibration: {self.pixel_scale:.1f} pixels/mm")
-
-
+        print("🔬 Microscope Calibrator - Device ID 1")
+        print("=" * 40)
 
     def connect_microscope(self):
-        """Connect to microscope."""
-        print("🔌 Connecting to microscope...")
+        """Connect to microscope on device ID 1."""
+        print(f"📡 Connecting to microscope (device {self.device_id})...")
 
-        self.microscope = MicroscopeCapture(
-            device_id=self.device_id,
-            target_fps=30,
-            resolution=(1280, 720)
-        )
+        self.cap = cv2.VideoCapture(self.device_id)
 
-        if self.microscope.connect():
-            print("✅ Microscope connected")
-            return True
-        else:
+        if not self.cap.isOpened():
             print("❌ Failed to connect to microscope")
             return False
 
-    def pixels_to_mm(self, pixels):
-        """Convert pixels to millimeters."""
-        return pixels / self.pixel_scale
+        # Set resolution
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
 
-    def mm_to_pixels(self, mm):
-        """Convert millimeters to pixels."""
-        return mm * self.pixel_scale
+        # Test capture
+        ret, frame = self.cap.read()
+        if not ret:
+            print("❌ Failed to capture from microscope")
+            return False
 
-    def measure_distance(self, point1, point2):
-        """Measure distance between two points in mm."""
-        pixel_distance = np.sqrt((point2[0] - point1[0]) ** 2 + (point2[1] - point1[1]) ** 2)
-        mm_distance = self.pixels_to_mm(pixel_distance)
+        print("✅ Microscope connected successfully")
+        print(
+            f"   Resolution: {int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+        return True
 
-        return {
-            'distance_mm': mm_distance,
-            'distance_pixels': pixel_distance,
-            'accuracy_mm': self.calibration_error,
-            'points': [point1, point2]
-        }
+    def get_frame(self):
+        """Get current frame from microscope."""
+        if self.cap is None:
+            return None
 
+        ret, frame = self.cap.read()
+        return frame if ret else None
 
+    def interactive_calibration(self):
+        """Interactive calibration using reference object."""
+        print("\n🎯 INTERACTIVE CALIBRATION")
+        print("=" * 30)
+        print("Steps:")
+        print("1. Place a reference object with known dimension")
+        print("2. Click two points to measure the reference")
+        print("3. Enter the actual dimension in mm")
+        print()
 
-    def interactive_measurement(self, image, instruction="Click two points to measure"):
-        """Interactive measurement on an image."""
+        # Get reference distance
+        while True:
+            try:
+                ref_mm = float(input("Enter reference object size in mm (e.g., 10.0): "))
+                if ref_mm > 0:
+                    self.reference_distance_mm = ref_mm
+                    break
+                else:
+                    print("Please enter a positive number")
+            except ValueError:
+                print("Please enter a valid number")
+
+        print(f"\n📏 Reference object: {self.reference_distance_mm} mm")
+        print("\nCapturing live view...")
+        print("Position your reference object and press SPACE to measure")
+
+        while True:
+            frame = self.get_frame()
+            if frame is None:
+                continue
+
+            # Add instructions to frame
+            cv2.putText(frame, f"Reference: {self.reference_distance_mm} mm",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame, "SPACE = Measure, ESC = Exit",
+                        (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            cv2.imshow('Calibration - Position Reference Object', frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord(' '):  # Space - start measurement
+                cv2.destroyAllWindows()
+                pixel_distance = self.measure_reference(frame)
+                if pixel_distance:
+                    self.calculate_calibration(pixel_distance)
+                    return True
+                else:
+                    print("❌ Measurement failed, trying again...")
+                    continue
+            elif key == 27:  # ESC
+                cv2.destroyAllWindows()
+                return False
+
+    def measure_reference(self, image):
+        """Measure reference object interactively."""
         points = []
 
         def mouse_callback(event, x, y, flags, param):
             if event == cv2.EVENT_LBUTTONDOWN:
                 points.append((x, y))
 
-        # Create window and set callback
-        cv2.namedWindow('Measurement', cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback('Measurement', mouse_callback)
+        cv2.namedWindow('Measure Reference Object', cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback('Measure Reference Object', mouse_callback)
 
-        print(f"\n📏 {instruction}")
+        print(f"\n📐 Click two points on the {self.reference_distance_mm}mm reference")
         print("Left-click two points, then press ENTER")
 
         while True:
             display_image = image.copy()
 
-            # Draw existing points
+            # Draw points
             for i, point in enumerate(points):
                 cv2.circle(display_image, point, 5, (0, 255, 0), -1)
                 cv2.putText(display_image, f"P{i + 1}", (point[0] + 10, point[1]),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
             # Draw line if we have 2 points
             if len(points) == 2:
                 cv2.line(display_image, points[0], points[1], (0, 255, 0), 2)
 
-                # Calculate and display distance
-                measurement = self.measure_distance(points[0], points[1])
-                distance_text = f"Distance: {measurement['distance_mm']:.3f} mm"
+                # Calculate pixel distance
+                pixel_dist = math.sqrt((points[1][0] - points[0][0]) ** 2 +
+                                       (points[1][1] - points[0][1]) ** 2)
 
-                cv2.putText(display_image, distance_text, (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                cv2.putText(display_image, f"Distance: {pixel_dist:.1f} pixels",
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(display_image, f"Reference: {self.reference_distance_mm} mm",
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
             # Instructions
-            cv2.putText(display_image, instruction, (10, image.shape[0] - 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(display_image, "Click 2 points, ENTER=Accept, ESC=Cancel",
-                        (10, image.shape[0] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(display_image, f"Click 2 points on {self.reference_distance_mm}mm object",
+                        (10, display_image.shape[0] - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(display_image, "ENTER = Accept, C = Clear, ESC = Cancel",
+                        (10, display_image.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            cv2.imshow('Measurement', display_image)
+            cv2.imshow('Measure Reference Object', display_image)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 13 and len(points) == 2:  # Enter
-                measurement = self.measure_distance(points[0], points[1])
+                pixel_distance = math.sqrt((points[1][0] - points[0][0]) ** 2 +
+                                           (points[1][1] - points[0][1]) ** 2)
                 cv2.destroyAllWindows()
-                return measurement['distance_mm']
+                return pixel_distance
+            elif key == ord('c'):  # Clear
+                points.clear()
             elif key == 27:  # ESC
                 cv2.destroyAllWindows()
                 return None
-            elif key == ord('c'):  # Clear points
-                points.clear()
 
-    def automated_measurement_from_detection(self, image, detection_results):
-        """Automatically measure specimens from detection results."""
-        measurements = []
+    def calculate_calibration(self, pixel_distance):
+        """Calculate calibration from reference measurement."""
+        self.reference_distance_pixels = pixel_distance
+        self.pixel_scale = pixel_distance / self.reference_distance_mm
+        self.mm_per_pixel = self.reference_distance_mm / pixel_distance
 
-        for detection in detection_results:
-            if detection.specimen_id == 2:  # Fracture surface class
-                # Extract fracture surface measurements
-                x, y, w, h = [int(coord) for coord in detection.bbox]
+        # Estimate calibration error (typically 1-2% for good calibration)
+        self.calibration_error = self.reference_distance_mm * 0.02  # 2% error estimate
 
-                # Measure fracture width (bbox width)
-                width_mm = self.pixels_to_mm(w)
+        print(f"\n✅ CALIBRATION CALCULATED")
+        print(f"   Reference: {self.reference_distance_mm} mm = {pixel_distance:.1f} pixels")
+        print(f"   Scale: {self.pixel_scale:.3f} pixels/mm")
+        print(f"   Resolution: {self.mm_per_pixel:.6f} mm/pixel")
+        print(f"   Estimated accuracy: ±{self.calibration_error:.3f} mm")
 
-                # Measure fracture height if needed
-                height_mm = self.pixels_to_mm(h)
+    def save_calibration(self):
+        """Save calibration to file."""
+        if self.pixel_scale is None:
+            print("❌ No calibration data to save")
+            return False
 
-                measurement = {
-                    'type': 'fracture_surface',
-                    'specimen_id': detection.specimen_id,
-                    'width_mm': width_mm,
-                    'height_mm': height_mm,
-                    'confidence': detection.confidence,
-                    'bbox': detection.bbox,
-                    'timestamp': datetime.now().isoformat(),
-                    'accuracy_mm': self.calibration_error
-                }
-
-                measurements.append(measurement)
-
-                # Log measurement
-                self.measurements.append(measurement)
-
-                print(f"🔬 Automated measurement:")
-                print(f"   Fracture width: {width_mm:.3f} ±{self.calibration_error:.3f} mm")
-                print(f"   Fracture height: {height_mm:.3f} ±{self.calibration_error:.3f} mm")
-                print(f"   Confidence: {detection.confidence:.2f}")
-
-        return measurements
-
-    def live_measurement_mode(self):
-        """Live measurement mode with detection."""
-        if not self.microscope:
-            print("❌ Microscope not connected")
-            return
-
-        # Load detector if not already loaded
-        if self.detector is None:
-            print("🤖 Loading specimen detector...")
-            try:
-                self.detector = SpecimenDetector(
-                    confidence_threshold=0.25,
-                    device='auto'
-                )
-                print("✅ Detector loaded")
-            except Exception as e:
-                print(f"⚠️ Could not load detector: {e}")
-                print("Manual measurement mode only")
-
-        print("\n🎬 LIVE MEASUREMENT MODE")
-        print("=" * 40)
-        print("Controls:")
-        print("  SPACE - Manual measurement")
-        print("  A - Auto measurement (if detector available)")
-        print("  S - Save current frame")
-        print("  Q - Quit")
-        print()
-
-        while True:
-            frame = self.microscope.get_frame()
-            if frame is None:
-                continue
-
-            display_frame = frame.copy()
-
-            # Run detection if available
-            detections = []
-            if self.detector:
-                try:
-                    detections = self.detector.detect_specimen(frame)
-
-                    # Draw detections
-                    for detection in detections:
-                        x, y, w, h = [int(coord) for coord in detection.bbox]
-
-                        if detection.specimen_id == 2:  # Fracture surface
-                            color = (0, 0, 255)  # Red
-                            label = "Fracture"
-
-                            # Show measurement
-                            width_mm = self.pixels_to_mm(w)
-                            measurement_text = f"{width_mm:.2f}mm"
-
-                            cv2.rectangle(display_frame, (x, y), (x + w, y + h), color, 2)
-                            cv2.putText(display_frame, f"{label}: {measurement_text}",
-                                        (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                        else:
-                            color = (0, 255, 0)  # Green
-                            cv2.rectangle(display_frame, (x, y), (x + w, y + h), color, 2)
-
-                except Exception as e:
-                    pass  # Continue without detection
-
-            # Add info overlay
-            self.add_measurement_overlay(display_frame, len(detections))
-
-            cv2.imshow('Live Measurement Mode', display_frame)
-
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord(' '):  # Manual measurement
-                distance = self.interactive_measurement(frame, "Manual measurement")
-                if distance:
-                    print(f"📏 Manual measurement: {distance:.3f} ±{self.calibration_error:.3f} mm")
-
-            elif key == ord('a') and self.detector:  # Auto measurement
-                measurements = self.automated_measurement_from_detection(frame, detections)
-                if measurements:
-                    print(f"🤖 Automated {len(measurements)} measurements")
-                else:
-                    print("🔍 No fracture surfaces detected for measurement")
-
-            elif key == ord('s'):  # Save frame
-                timestamp = int(time.time())
-                filename = f"measurement_frame_{timestamp}.jpg"
-                cv2.imwrite(filename, frame)
-                print(f"💾 Saved frame: {filename}")
-
-            elif key == ord('q'):  # Quit
-                break
-
-        cv2.destroyAllWindows()
-
-    def add_measurement_overlay(self, frame, detection_count):
-        """Add measurement info overlay to frame."""
-        h, w = frame.shape[:2]
-
-        # Semi-transparent background
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 10), (350, 120), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-
-        # Info text
-        info_lines = [
-            f"Calibration: {self.pixel_scale:.1f} px/mm",
-            f"Accuracy: ±{self.calibration_error:.3f} mm",
-            f"Detections: {detection_count}",
-            f"Measurements: {len(self.measurements)}"
-        ]
-
-        for i, line in enumerate(info_lines):
-            cv2.putText(frame, line, (20, 35 + i * 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-    def export_measurements(self, filename=None):
-        """Export measurements to Excel/CSV."""
-        if not self.measurements:
-            print("📊 No measurements to export")
-            return
-
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"measurements_{timestamp}.xlsx"
-
-        # Convert to DataFrame
-        df = pd.DataFrame(self.measurements)
-
-        # Add summary statistics
-        summary = {
-            'session_start': datetime.fromtimestamp(self.session_start).isoformat(),
-            'total_measurements': len(self.measurements),
-            'calibration_date': self.calibration_date,
-            'calibration_accuracy': self.calibration_error,
-            'pixel_scale': self.pixel_scale
+        calibration_data = {
+            'device_id': self.device_id,
+            'timestamp': datetime.now().isoformat(),
+            'reference_distance_mm': self.reference_distance_mm,
+            'reference_distance_pixels': self.reference_distance_pixels,
+            'pixel_scale': self.pixel_scale,
+            'mm_per_pixel': self.mm_per_pixel,
+            'calibration_error_mm': self.calibration_error,
+            'resolution': [
+                int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            ],
+            'fps': int(self.cap.get(cv2.CAP_PROP_FPS))
         }
 
-        # Save to Excel with multiple sheets
-        with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='Measurements', index=False)
+        try:
+            with open(self.calibration_file, 'w') as f:
+                json.dump(calibration_data, f, indent=2)
 
-            # Summary sheet
-            summary_df = pd.DataFrame([summary])
-            summary_df.to_excel(writer, sheet_name='Session_Summary', index=False)
+            print(f"💾 Calibration saved to: {self.calibration_file}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to save calibration: {e}")
+            return False
 
-        print(f"📊 Measurements exported to: {filename}")
-        print(f"   Total measurements: {len(self.measurements)}")
-
-        return filename
-
-
-
-    def run_measurement_session(self):
-        """Run complete measurement session."""
-        print("🚀 STARTING CALIBRATED MEASUREMENT SESSION")
-        print("=" * 50)
-
-        # Connect microscope
-        if not self.connect_microscope():
+    def load_calibration(self):
+        """Load existing calibration."""
+        if not self.calibration_file.exists():
+            print("❌ No calibration file found")
             return False
 
         try:
-            # Start measurement session
-            self.live_measurement_mode()
+            with open(self.calibration_file, 'r') as f:
+                data = json.load(f)
 
-            # Export measurements
-            if self.measurements:
-                export = input("\nExport measurements? (Y/n): ")
-                if export.lower() != 'n':
-                    filename = self.export_measurements()
-                    print(f"✅ Session data exported to: {filename}")
+            self.pixel_scale = data['pixel_scale']
+            self.mm_per_pixel = data['mm_per_pixel']
+            self.calibration_error = data['calibration_error_mm']
+            self.reference_distance_mm = data['reference_distance_mm']
+            self.reference_distance_pixels = data['reference_distance_pixels']
 
-            print("\n✅ Measurement session completed!")
+            print("✅ Calibration loaded successfully")
+            print(f"   Date: {data['timestamp']}")
+            print(f"   Scale: {self.pixel_scale:.3f} pixels/mm")
+            print(f"   Resolution: {self.mm_per_pixel:.6f} mm/pixel")
+            print(f"   Accuracy: ±{self.calibration_error:.3f} mm")
             return True
-
         except Exception as e:
-            print(f"❌ Error during measurement session: {e}")
+            print(f"❌ Failed to load calibration: {e}")
             return False
-        finally:
-            if self.microscope:
-                self.microscope.disconnect()
 
-
-def create_measurement_report(measurements, pixel_scale=100.0, mm_per_pixel=0.01, calibration_error=0.001):
-    """Create a detailed measurement report."""
-    if not measurements:
-        return "No measurements to report"
-
-    report = f"""
-CHARPY SPECIMEN MEASUREMENT REPORT
-{'=' * 60}
-Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Session Duration: {(time.time() - measurements[0].get('session_start', time.time())) / 60:.1f} minutes
-
-CALIBRATION INFO:
-• Scale Factor: {pixel_scale:.3f} pixels/mm
-• Resolution: {mm_per_pixel:.6f} mm/pixel
-• Measurement Accuracy: ±{calibration_error:.4f} mm
-• Calibration Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-MEASUREMENT SUMMARY:
-• Total Measurements: {len(measurements)}
-• Fracture Surface Measurements: {len([m for m in measurements if m.get('type') == 'fracture_surface'])}
-
-DETAILED MEASUREMENTS:
-"""
-
-    for i, measurement in enumerate(measurements, 1):
-        if measurement.get('type') == 'fracture_surface':
-            report += f"""
-Measurement {i}:
-  • Type: Fracture Surface
-  • Width: {measurement['width_mm']:.3f} ±{measurement['accuracy_mm']:.3f} mm
-  • Height: {measurement['height_mm']:.3f} ±{measurement['accuracy_mm']:.3f} mm
-  • Detection Confidence: {measurement.get('confidence', 'N/A')}
-  • Timestamp: {measurement['timestamp']}
-"""
-
-    # Statistical analysis
-    fracture_widths = [m['width_mm'] for m in measurements if m.get('type') == 'fracture_surface']
-    if fracture_widths:
-        report += f"""
-STATISTICAL ANALYSIS:
-• Mean Fracture Width: {np.mean(fracture_widths):.3f} mm
-• Std Deviation: {np.std(fracture_widths):.3f} mm
-• Min Width: {np.min(fracture_widths):.3f} mm
-• Max Width: {np.max(fracture_widths):.3f} mm
-• Range: {np.max(fracture_widths) - np.min(fracture_widths):.3f} mm
-"""
-
-    report += f"\n{'=' * 60}\n"
-    return report
-
-
-def quick_measurement_tool():
-    """Quick measurement tool for single measurements."""
-    print("⚡ QUICK MEASUREMENT TOOL")
-    print("=" * 30)
-
-    # Initialize system
-    system = CalibratedMeasurementSystem()
-
-    # Connect microscope
-    if not system.connect_microscope():
-        return
-
-    try:
-        print("\n📸 Capturing image for measurement...")
-
-        # Capture single frame
-        frame = system.microscope.get_frame()
-        if frame is None:
-            print("❌ Failed to capture image")
+    def test_measurement(self):
+        """Test measurement with current calibration."""
+        if self.pixel_scale is None:
+            print("❌ No calibration loaded")
             return
 
-        # Save reference image
-        timestamp = int(time.time())
-        image_file = f"quick_measurement_{timestamp}.jpg"
-        cv2.imwrite(image_file, frame)
-        print(f"💾 Image saved: {image_file}")
+        print("\n🧪 TEST MEASUREMENT")
+        print("Position an object and measure it")
 
-        # Interactive measurement
-        distance = system.interactive_measurement(frame, "Quick measurement - click two points")
-
-        if distance:
-            print(f"\n📏 MEASUREMENT RESULT:")
-            print(f"   Distance: {distance:.3f} ±{system.calibration_error:.3f} mm")
-            print(f"   Image: {image_file}")
-
-            # Save measurement data
-            measurement_data = {
-                'distance_mm': distance,
-                'accuracy_mm': system.calibration_error,
-                'image_file': image_file,
-                'timestamp': datetime.now().isoformat(),
-                'calibration_scale': system.pixel_scale
-            }
-
-            data_file = f"quick_measurement_{timestamp}.json"
-            with open(data_file, 'w') as f:
-                json.dump(measurement_data, f, indent=2)
-
-            print(f"   Data: {data_file}")
-        else:
-            print("❌ Measurement cancelled")
-
-    finally:
-        system.microscope.disconnect()
-
-
-
-
-
-def batch_measurement_tool():
-    """Tool for measuring multiple specimens in sequence."""
-    print("📊 BATCH MEASUREMENT TOOL")
-    print("=" * 30)
-
-    system = CalibratedMeasurementSystem()
-
-    if not system.connect_microscope():
-        return
-
-    try:
-        num_specimens = int(input("Number of specimens to measure: "))
-
-        batch_measurements = []
-
-        for i in range(1, num_specimens + 1):
-            print(f"\n🔬 SPECIMEN {i}/{num_specimens}")
-            input(f"Position specimen {i} and press ENTER...")
-
-            # Capture image
-            frame = system.microscope.get_frame()
+        while True:
+            frame = self.get_frame()
             if frame is None:
-                print(f"❌ Failed to capture specimen {i}")
                 continue
 
-            # Save specimen image
-            timestamp = int(time.time())
-            image_file = f"specimen_{i:02d}_{timestamp}.jpg"
-            cv2.imwrite(image_file, frame)
+            cv2.putText(frame, f"Scale: {self.pixel_scale:.2f} px/mm",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(frame, "SPACE = Measure, ESC = Exit",
+                        (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            # Measure
-            distance = system.interactive_measurement(frame, f"Measure specimen {i}")
+            cv2.imshow('Test Measurement', frame)
 
-            if distance:
-                measurement = {
-                    'specimen_number': i,
-                    'distance_mm': distance,
-                    'accuracy_mm': system.calibration_error,
-                    'image_file': image_file,
-                    'timestamp': datetime.now().isoformat()
-                }
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord(' '):  # Space - measure
+                cv2.destroyAllWindows()
+                distance_mm = self.quick_measure(frame)
+                if distance_mm:
+                    print(f"📏 Measurement: {distance_mm:.3f} ±{self.calibration_error:.3f} mm")
+                print("Press SPACE for another measurement, ESC to exit")
+            elif key == 27:  # ESC
+                cv2.destroyAllWindows()
+                break
 
-                batch_measurements.append(measurement)
+    def quick_measure(self, image):
+        """Quick measurement tool."""
+        points = []
 
-                print(f"✅ Specimen {i}: {distance:.3f} ±{system.calibration_error:.3f} mm")
-            else:
-                print(f"❌ Specimen {i} measurement cancelled")
+        def mouse_callback(event, x, y, flags, param):
+            if event == cv2.EVENT_LBUTTONDOWN:
+                points.append((x, y))
 
-        # Export batch results
-        if batch_measurements:
-            batch_file = f"batch_measurements_{int(time.time())}.json"
-            with open(batch_file, 'w') as f:
-                json.dump(batch_measurements, f, indent=2)
+        cv2.namedWindow('Quick Measure', cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback('Quick Measure', mouse_callback)
 
-            # Create Excel export
-            df = pd.DataFrame(batch_measurements)
-            excel_file = batch_file.replace('.json', '.xlsx')
-            df.to_excel(excel_file, index=False)
+        while True:
+            display_image = image.copy()
 
-            print(f"\n📊 BATCH RESULTS:")
-            print(f"   Specimens measured: {len(batch_measurements)}")
-            print(f"   Mean: {np.mean([m['distance_mm'] for m in batch_measurements]):.3f} mm")
-            print(f"   Std Dev: {np.std([m['distance_mm'] for m in batch_measurements]):.3f} mm")
-            print(f"   Data saved: {batch_file}")
-            print(f"   Excel saved: {excel_file}")
+            # Draw points
+            for i, point in enumerate(points):
+                cv2.circle(display_image, point, 5, (255, 0, 0), -1)
+                cv2.putText(display_image, f"P{i + 1}", (point[0] + 10, point[1]),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
-    finally:
-        system.microscope.disconnect()
+            # Draw line and show measurement
+            if len(points) == 2:
+                cv2.line(display_image, points[0], points[1], (255, 0, 0), 2)
+
+                pixel_dist = math.sqrt((points[1][0] - points[0][0]) ** 2 +
+                                       (points[1][1] - points[0][1]) ** 2)
+                mm_dist = pixel_dist / self.pixel_scale
+
+                cv2.putText(display_image, f"Distance: {mm_dist:.3f} mm",
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+            cv2.putText(display_image, "Click 2 points, ENTER = Accept, ESC = Cancel",
+                        (10, display_image.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            cv2.imshow('Quick Measure', display_image)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == 13 and len(points) == 2:  # Enter
+                pixel_distance = math.sqrt((points[1][0] - points[0][0]) ** 2 +
+                                           (points[1][1] - points[0][1]) ** 2)
+                mm_distance = pixel_distance / self.pixel_scale
+                cv2.destroyAllWindows()
+                return mm_distance
+            elif key == 27:  # ESC
+                cv2.destroyAllWindows()
+                return None
+
+    def disconnect(self):
+        """Disconnect from microscope."""
+        if self.cap:
+            self.cap.release()
+            cv2.destroyAllWindows()
+            print("📴 Microscope disconnected")
+
+    def run(self):
+        """Run calibrator main menu."""
+        if not self.connect_microscope():
+            return
+
+        try:
+            while True:
+                print("\n🔬 MICROSCOPE CALIBRATOR MENU")
+                print("=" * 35)
+                print("1. Create new calibration")
+                print("2. Load existing calibration")
+                print("3. Test measurement")
+                print("4. View calibration info")
+                print("5. Exit")
+
+                choice = input("\nSelect option (1-5): ").strip()
+
+                if choice == '1':
+                    if self.interactive_calibration():
+                        self.save_calibration()
+
+                elif choice == '2':
+                    self.load_calibration()
+
+                elif choice == '3':
+                    self.test_measurement()
+
+                elif choice == '4':
+                    if self.pixel_scale:
+                        print(f"\n📊 CURRENT CALIBRATION:")
+                        print(f"   Scale: {self.pixel_scale:.3f} pixels/mm")
+                        print(f"   Resolution: {self.mm_per_pixel:.6f} mm/pixel")
+                        print(f"   Accuracy: ±{self.calibration_error:.3f} mm")
+                        print(f"   Reference: {self.reference_distance_mm} mm")
+                    else:
+                        print("❌ No calibration loaded")
+
+                elif choice == '5':
+                    break
+
+                else:
+                    print("❌ Invalid choice")
+
+        finally:
+            self.disconnect()
 
 
 def main():
-    """Main function with tool selection."""
-    print("📏 CALIBRATED MEASUREMENT SYSTEM")
-    print("=" * 50)
-
-    tools = {
-        '1': ('Full Measurement Session', 'Complete session with live mode and detection'),
-        '2': ('Quick Measurement', 'Single measurement tool'),
-        '3': ('Batch Measurement', 'Measure multiple specimens'),
-        '4': ('View Calibration Info', 'Show current calibration details')
-    }
-
-    print("\nAvailable Tools:")
-    for key, (name, desc) in tools.items():
-        print(f"  {key}. {name} - {desc}")
-
-    choice = input("\nSelect tool (1-4): ").strip()
-
-    if choice == '1':
-        system = CalibratedMeasurementSystem()
-        system.run_measurement_session()
-    elif choice == '2':
-        quick_measurement_tool()
-    elif choice == '3':
-        batch_measurement_tool()
-    elif choice == '4':
-        system = CalibratedMeasurementSystem()
-        print(f"\n📊 CALIBRATION INFORMATION:")
-        print(f"   Date: {system.calibration_date}")
-        print(f"   Scale: {system.pixel_scale:.3f} pixels/mm")
-        print(f"   Resolution: {system.mm_per_pixel:.6f} mm/pixel")
-        print(f"   Accuracy: ±{system.calibration_error:.4f} mm")
-        print(f"   Device ID: {system.device_id}")
-        print("   Note: Using default calibration values")
-    else:
-        print("❌ Invalid selection")
+    """Main function."""
+    calibrator = MicroscopeCalibrator()
+    calibrator.run()
 
 
 if __name__ == "__main__":

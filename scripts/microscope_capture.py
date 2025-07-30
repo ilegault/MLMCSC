@@ -656,7 +656,7 @@ def main():
     # Initialize capture system
     capture_system = CharpyPhotoCaptureSystem(
         device_id=1,  # Your microscope camera
-        output_dir="../data/datasets/charpy_dataset_v2"
+        output_dir="../data/charpy_dataset_v2"
     )
 
     print("🔧 Setup Tips:")
