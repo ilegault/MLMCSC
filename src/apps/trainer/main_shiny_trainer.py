@@ -354,7 +354,7 @@ def main():
 
     # Step 4: Save model
     print("\n🔄 Step 4: Saving model...")
-    trainer.save_model("shiny_region_charpy_model.pkl")
+    trainer.save_model("charpy_shear_regressor.pkl")
 
     # Step 5: Test on any available samples
     print("\n🔄 Step 5: Testing model...")
