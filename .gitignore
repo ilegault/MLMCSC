@@ -215,6 +215,11 @@ dataset_stats.json
 *.swp
 *.swo
 *~
+# Backup files
+*.backup
+*.BACKUP
+
+
 
 # Additional cache directories
 **/cache/
@@ -225,6 +230,13 @@ cache/
 tmp/
 **/temp/
 temp/
+
+# Yaml files - Global exclusion with exceptions
+*.yaml
+*.YAML
+*.yml
+*.YML
+
 
 # ============================================
 # EXCEPTIONS - Files you DO want to track
