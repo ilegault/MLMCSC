@@ -594,7 +594,7 @@ def main():
     
     # Default paths - update these based on your setup
     yolo_model_path = "C:/Users/IGLeg/PycharmProjects/MLMCSC/models/charpy_3class/charpy_3class_20250729_110009/weights/best.pt"
-    regression_model_path = "C:/Users/IGLeg/PycharmProjects/MLMCSC/src/postprocessing/charpy_shear_regressor.pkl"
+    regression_model_path = "C:/Users/IGLeg/PycharmProjects/MLMCSC/src/postprocessing/shiny_region_charpy_model.pkl"
     test_images_dir = "C:/Users/IGLeg/PycharmProjects/MLMCSC/data/charpy_dataset_v2/images/test"
     
     print(f"🎯 YOLO Model: {yolo_model_path}")
