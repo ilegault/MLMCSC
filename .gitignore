@@ -141,6 +141,7 @@ dataset_stats.json
 # Text files - Global exclusion with exceptions
 *.txt
 *.TXT
+*.csv
 
 # JSON files - Global exclusion with exceptions  
 *.json
