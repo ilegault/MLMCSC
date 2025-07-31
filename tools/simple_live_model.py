@@ -98,7 +98,7 @@ class DictModelWrapper:
             
             return {
                 'success': True,
-                'shear_percentage': float(prediction),
+                'prediction': float(prediction),
                 'confidence': float(confidence),
                 'model_type': self.model_type,
                 'features_used': len(self.feature_names)
@@ -109,7 +109,7 @@ class DictModelWrapper:
             return {
                 'success': False,
                 'error': str(e),
-                'shear_percentage': 0.0,
+                'prediction': 0.0,
                 'confidence': 0.0
             }
     
