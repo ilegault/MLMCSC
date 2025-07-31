@@ -629,7 +629,7 @@ class SimpleWorkingLiveViewer:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"microscope_screenshot_{timestamp}.jpg"
 
-        screenshots_dir = Path("screenshots")
+        screenshots_dir = Path("../tools/screenshots")
         screenshots_dir.mkdir(exist_ok=True)
 
         filepath = screenshots_dir / filename
