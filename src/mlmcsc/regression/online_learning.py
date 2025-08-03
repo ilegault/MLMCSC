@@ -299,7 +299,11 @@ class OnlineLearningSystem:
             
             initialization_time = time.time() - start_time
             logger.info(f"Model initialized with {len(X)} samples in {initialization_time:.2f}s")
-            logger.info(f"Initial performance - R²: {performance['r2']:.3f}, RMSE: {performance['rmse']:.3f}")
+            
+            # Handle None values in performance metrics for logging
+            r2_str = f"{performance['r2']:.3f}" if performance['r2'] is not None else "N/A (insufficient samples)"
+            rmse_str = f"{performance['rmse']:.3f}" if performance['rmse'] is not None else "N/A"
+            logger.info(f"Initial performance - R²: {r2_str}, RMSE: {rmse_str}")
             
             return performance
             
@@ -898,15 +902,22 @@ class OnlineLearningSystem:
             r2 = r2_score(y_true, y_pred)
             rmse = np.sqrt(mse)
             
+            # Handle NaN values that can occur with insufficient samples
+            def safe_float(value):
+                """Convert to float, replacing NaN with None for JSON compatibility."""
+                if np.isnan(value) or np.isinf(value):
+                    return None
+                return float(value)
+            
             return {
-                'mse': float(mse),
-                'mae': float(mae),
-                'r2': float(r2),
-                'rmse': float(rmse)
+                'mse': safe_float(mse),
+                'mae': safe_float(mae),
+                'r2': safe_float(r2),
+                'rmse': safe_float(rmse)
             }
         except Exception as e:
             logger.error(f"Performance calculation failed: {e}")
-            return {'mse': 0.0, 'mae': 0.0, 'r2': 0.0, 'rmse': 0.0}
+            return {'mse': 0.0, 'mae': 0.0, 'r2': None, 'rmse': 0.0}
     
     def _evaluate_current_performance(self, X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         """Evaluate current model performance on given data."""
@@ -915,7 +926,7 @@ class OnlineLearningSystem:
             return self._calculate_performance(y, y_pred)
         except Exception as e:
             logger.error(f"Performance evaluation failed: {e}")
-            return {'mse': 0.0, 'mae': 0.0, 'r2': 0.0, 'rmse': 0.0}
+            return {'mse': 0.0, 'mae': 0.0, 'r2': None, 'rmse': 0.0}
     
     def get_learning_curve(self) -> pd.DataFrame:
         """Get learning curve data showing performance over time."""

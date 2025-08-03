@@ -1,0 +1,32 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MLMCSC
+Comment=Machine Learning Microscope Control System
+GenericName=Microscope Control System
+Keywords=microscope;machine learning;image analysis;control system;
+Exec=/usr/local/bin/mlmcsc-launcher
+Icon=/usr/share/pixmaps/mlmcsc.png
+Terminal=false
+StartupNotify=true
+Categories=Science;Education;Graphics;Photography;
+MimeType=image/jpeg;image/png;image/tiff;image/bmp;
+
+# Additional metadata
+StartupWMClass=MLMCSC
+Actions=StartAPI;StartWorker;OpenDocs;
+
+[Desktop Action StartAPI]
+Name=Start API Server
+Exec=/usr/local/bin/mlmcsc-start-api
+Icon=/usr/share/pixmaps/mlmcsc-api.png
+
+[Desktop Action StartWorker]
+Name=Start Worker
+Exec=/usr/local/bin/mlmcsc-start-worker
+Icon=/usr/share/pixmaps/mlmcsc-worker.png
+
+[Desktop Action OpenDocs]
+Name=Open Documentation
+Exec=xdg-open http://localhost:8000/docs
+Icon=/usr/share/pixmaps/mlmcsc-docs.png
