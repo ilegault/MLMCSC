@@ -76,6 +76,47 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def test_corrected_measurement():
+    """Test the corrected lateral expansion measurement."""
+    
+    # Test with realistic corner positions
+    test_corners = [
+        (100, 50),   # Top-left (fracture)
+        (300, 50),   # Top-right (fracture)
+        (85, 200),   # Bottom-left (bulged 15px outward)
+        (315, 200)   # Bottom-right (bulged 15px outward)
+    ]
+    
+    measurer = CharpyLateralExpansionMeasurer(calibration_factor=0.036)
+    
+    # Convert to YOLO format
+    yolo_detections = []
+    for x, y in test_corners:
+        yolo_detections.append({
+            'class': 'charpy_corner',
+            'x': float(x),
+            'y': float(y),
+            'confidence': 0.95
+        })
+    
+    # Create test image
+    test_image = np.zeros((250, 400, 3), dtype=np.uint8)
+    cv2.imwrite("test_corrected_measurement.jpg", test_image)
+    
+    # Test measurement
+    measurements, result_image = measurer.process_charpy_specimen(
+        image_path="test_corrected_measurement.jpg",
+        yolo_detections=yolo_detections,
+        output_path="corrected_measurement_result.jpg"
+    )
+    
+    print(f"\n=== CORRECTED Measurement Results ===")
+    print(f"Left expansion: {measurements.left_expansion_pixels:.1f}px ({measurements.left_expansion_mm:.3f}mm)")
+    print(f"Right expansion: {measurements.right_expansion_pixels:.1f}px ({measurements.right_expansion_mm:.3f}mm)")
+    print(f"Total expansion: {measurements.total_expansion_pixels:.1f}px ({measurements.total_expansion_mm:.3f}mm)")
+    print(f"Expected: ~30px total (15px each side)")
+
+
 class CharpyMeasurementPipeline:
     """
     Complete pipeline for Charpy specimen measurement integrated with MLMCSC.
@@ -535,4 +576,5 @@ def main():
 
 
 if __name__ == "__main__":
+    test_corrected_measurement()
     main()

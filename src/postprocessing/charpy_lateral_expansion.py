@@ -130,52 +130,39 @@ class CharpyLateralExpansionMeasurer:
     
     def identify_bottom_corners(self, corners: List[Tuple[float, float]]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
         """
-        Find the two corners farthest from the fracture surface.
-        
-        Args:
-            corners: List of corner coordinates
-            
-        Returns:
-            Tuple of (bottom_left, bottom_right) coordinates
+        Identify bottom corners (impact end) and top corners (fracture end).
+        Bottom corners have higher y-values (further from fracture surface).
         """
-        if len(corners) < 4:
-            raise ValueError(f"Need exactly 4 corners, got {len(corners)}")
+        # Sort corners by y-coordinate (bottom corners have higher y-values)
+        sorted_corners = sorted(corners, key=lambda p: p[1])
         
-        # Sort corners by y-coordinate (assuming y increases downward)
-        sorted_corners = sorted(corners, key=lambda p: p[1], reverse=True)
+        # Bottom two corners (impact end - more deformed)
+        bottom_corners = sorted_corners[2:]  # Last 2 (highest y)
         
-        # Bottom two corners are the ones with highest y values
-        bottom_corners = sorted_corners[:2]
+        # Sort horizontally to get left and right
         bottom_left = min(bottom_corners, key=lambda p: p[0])
         bottom_right = max(bottom_corners, key=lambda p: p[0])
         
-        logger.debug(f"Bottom corners identified: left={bottom_left}, right={bottom_right}")
+        logger.debug(f"Identified bottom corners - Left: {bottom_left}, Right: {bottom_right}")
         return bottom_left, bottom_right
     
-    def identify_top_corners(self, 
-                           corners: List[Tuple[float, float]], 
-                           bottom_corners: List[Tuple[float, float]]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    def identify_top_corners(self, corners: List[Tuple[float, float]], 
+                        bottom_corners: List[Tuple[float, float]]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
         """
-        Identify the two top corners (near fracture surface).
-        
-        Args:
-            corners: List of all corner coordinates
-            bottom_corners: List of bottom corner coordinates
-            
-        Returns:
-            Tuple of (top_left, top_right) coordinates
+        Identify top corners (fracture surface end).
+        These are the corners NOT in the bottom_corners list.
         """
-        remaining_corners = [c for c in corners if c not in bottom_corners]
+        # Find corners that are not bottom corners
+        top_corners = [c for c in corners if c not in bottom_corners]
         
-        if len(remaining_corners) < 2:
-            raise ValueError("Could not identify top corners")
+        if len(top_corners) != 2:
+            raise ValueError(f"Expected 2 top corners, found {len(top_corners)}")
         
-        # Sort by y-coordinate (ascending for top corners)
-        top_corners = sorted(remaining_corners, key=lambda p: p[1])[:2]
+        # Sort horizontally
         top_left = min(top_corners, key=lambda p: p[0])
         top_right = max(top_corners, key=lambda p: p[0])
         
-        logger.debug(f"Top corners identified: left={top_left}, right={top_right}")
+        logger.debug(f"Identified top corners - Left: {top_left}, Right: {top_right}")
         return top_left, top_right
     
     def create_reference_line(self, 
@@ -300,42 +287,52 @@ class CharpyLateralExpansionMeasurer:
         return (proj_x, proj_y)
     
     def measure_lateral_expansion(self, 
-                                top_left: Tuple[float, float], 
-                                top_right: Tuple[float, float], 
-                                left_perp: LineSegment, 
-                                right_perp: LineSegment) -> Dict[str, float]:
+                            top_left: Tuple[float, float], 
+                            top_right: Tuple[float, float], 
+                            left_perp: LineSegment, 
+                            right_perp: LineSegment,
+                            bottom_left: Tuple[float, float],
+                            bottom_right: Tuple[float, float]) -> Dict[str, float]:
         """
-        Measure perpendicular distances from top corners to perpendicular lines.
+        Measure ACTUAL lateral expansion by calculating how much the specimen
+        has bulged outward from its original straight edges.
         
-        Args:
-            top_left: Left top corner coordinates
-            top_right: Right top corner coordinates
-            left_perp: Left perpendicular line segment
-            right_perp: Right perpendicular line segment
-            
-        Returns:
-            Dictionary with expansion measurements
+        Original method was WRONG - it measured specimen width, not expansion.
+        This corrected method measures how much material has bulged OUT.
         """
-        # Measure left side expansion
-        left_expansion = self.point_to_line_distance(top_left, 
-                                                   left_perp.start, 
-                                                   left_perp.end)
         
-        # Measure right side expansion
-        right_expansion = self.point_to_line_distance(top_right, 
-                                                    right_perp.start, 
-                                                    right_perp.end)
+        # CORRECTED APPROACH:
+        # 1. The fracture surface (top) is less deformed - use it as reference
+        # 2. Original edges would be straight lines from top corners downward
+        # 3. Measure how far bottom corners have bulged from these original edges
+        
+        # Calculate where the original straight edges would be
+        # (vertical lines from top corners)
+        original_left_edge_x = top_left[0]
+        original_right_edge_x = top_right[0]
+        
+        # Measure how far bottom corners have bulged outward
+        left_expansion = abs(bottom_left[0] - original_left_edge_x)
+        right_expansion = abs(bottom_right[0] - original_right_edge_x)
         
         # Total lateral expansion
         total_expansion = left_expansion + right_expansion
         
-        logger.debug(f"Measured expansions - Left: {left_expansion:.2f}px, "
-                    f"Right: {right_expansion:.2f}px, Total: {total_expansion:.2f}px")
+        logger.debug(f"CORRECTED Lateral expansion measurements:")
+        logger.debug(f"  Original left edge X: {original_left_edge_x:.2f}")
+        logger.debug(f"  Original right edge X: {original_right_edge_x:.2f}")
+        logger.debug(f"  Bottom left actual X: {bottom_left[0]:.2f}")
+        logger.debug(f"  Bottom right actual X: {bottom_right[0]:.2f}")
+        logger.debug(f"  Left bulging: {left_expansion:.2f}px")
+        logger.debug(f"  Right bulging: {right_expansion:.2f}px")
+        logger.debug(f"  Total expansion: {total_expansion:.2f}px")
         
         return {
             'left_expansion_pixels': left_expansion,
             'right_expansion_pixels': right_expansion,
-            'total_expansion_pixels': total_expansion
+            'total_expansion_pixels': total_expansion,
+            'original_left_edge_x': original_left_edge_x,
+            'original_right_edge_x': original_right_edge_x
         }
     
     def pixels_to_mm(self, pixel_distance: float, calibration_factor: Optional[float] = None) -> Optional[float]:
@@ -364,92 +361,59 @@ class CharpyLateralExpansionMeasurer:
                              top_right: Tuple[float, float],
                              left_perp: LineSegment,
                              right_perp: LineSegment) -> np.ndarray:
-        """
-        Draw all lines and measurements on the image for verification.
+        """Enhanced visualization showing actual lateral expansion."""
         
-        Args:
-            image: Input image
-            corners: List of corner coordinates
-            measurements: Measurement results
-            bottom_left, bottom_right: Bottom corner coordinates
-            top_left, top_right: Top corner coordinates
-            left_perp, right_perp: Perpendicular line segments
-            
-        Returns:
-            Annotated image
-        """
         result_image = image.copy()
         
-        # Draw corners with different colors for identification
-        for i, corner in enumerate(corners):
-            color = [(0, 255, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0)][i % 4]
-            cv2.circle(result_image, (int(corner[0]), int(corner[1])), 8, color, -1)
-            cv2.putText(result_image, f"C{i+1}", 
-                       (int(corner[0]) + 10, int(corner[1]) - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        # Draw original straight edges (green lines)
+        original_left_x = top_left[0]
+        original_right_x = top_right[0]
         
-        # Draw baseline between bottom corners
-        cv2.line(result_image, 
-                (int(bottom_left[0]), int(bottom_left[1])), 
-                (int(bottom_right[0]), int(bottom_right[1])), 
-                (255, 0, 0), 3)
+        # Draw original edges as vertical lines
+        cv2.line(result_image,
+                 (int(original_left_x), int(top_left[1])),
+                 (int(original_left_x), int(bottom_left[1])),
+                 (0, 255, 0), 2)  # Green for original edges
         
-        # Draw perpendicular lines
-        cv2.line(result_image, 
-                (int(left_perp.start[0]), int(left_perp.start[1])), 
-                (int(left_perp.end[0]), int(left_perp.end[1])), 
-                (0, 0, 255), 2)
-        cv2.line(result_image, 
-                (int(right_perp.start[0]), int(right_perp.start[1])), 
-                (int(right_perp.end[0]), int(right_perp.end[1])), 
-                (0, 0, 255), 2)
+        cv2.line(result_image,
+                 (int(original_right_x), int(top_right[1])),
+                 (int(original_right_x), int(bottom_right[1])),
+                 (0, 255, 0), 2)
         
-        # Draw measurement lines (from top corners to their projections)
-        left_proj = self.find_perpendicular_projection(top_left, left_perp)
-        right_proj = self.find_perpendicular_projection(top_right, right_perp)
+        # Draw expansion measurement lines (yellow)
+        cv2.line(result_image,
+                 (int(original_left_x), int(bottom_left[1])),
+                 (int(bottom_left[0]), int(bottom_left[1])),
+                 (0, 255, 255), 3)  # Yellow for left expansion
         
-        cv2.line(result_image, 
-                (int(top_left[0]), int(top_left[1])), 
-                (int(left_proj[0]), int(left_proj[1])), 
-                (255, 255, 0), 2)
-        cv2.line(result_image, 
-                (int(top_right[0]), int(top_right[1])), 
-                (int(right_proj[0]), int(right_proj[1])), 
-                (255, 255, 0), 2)
+        cv2.line(result_image,
+                 (int(original_right_x), int(bottom_right[1])),
+                 (int(bottom_right[0]), int(bottom_right[1])),
+                 (0, 255, 255), 3)  # Yellow for right expansion
         
-        # Add text annotations
-        y_offset = 30
+        # Draw corners
+        for corner in corners:
+            cv2.circle(result_image, (int(corner[0]), int(corner[1])), 5, (255, 0, 0), -1)
+        
+        # Add measurement text
         cv2.putText(result_image, f"Left: {measurements.left_expansion_pixels:.1f}px", 
-                   (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        y_offset += 30
+                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(result_image, f"Right: {measurements.right_expansion_pixels:.1f}px", 
-                   (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        y_offset += 30
+                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(result_image, f"Total: {measurements.total_expansion_pixels:.1f}px", 
-                   (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                   (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
-        # Add mm measurements if available
-        if measurements.total_expansion_mm is not None:
-            y_offset += 40
-            cv2.putText(result_image, f"Left: {measurements.left_expansion_mm:.2f}mm", 
-                       (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            y_offset += 30
-            cv2.putText(result_image, f"Right: {measurements.right_expansion_mm:.2f}mm", 
-                       (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            y_offset += 30
+        if measurements.total_expansion_mm:
             cv2.putText(result_image, f"Total: {measurements.total_expansion_mm:.2f}mm", 
-                       (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                       (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
-        # Add legend
-        legend_y = result_image.shape[0] - 120
-        cv2.putText(result_image, "Legend:", (10, legend_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(result_image, "Blue: Baseline", (10, legend_y + 20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-        cv2.putText(result_image, "Red: Perpendiculars", (10, legend_y + 40), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        cv2.putText(result_image, "Yellow: Measurements", (10, legend_y + 60), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+        # Legend
+        cv2.putText(result_image, "Green: Original edges", 
+                   (10, image.shape[0] - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(result_image, "Yellow: Expansion", 
+                   (10, image.shape[0] - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.putText(result_image, "Blue: Corners", 
+                   (10, image.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
         
         return result_image
     
@@ -524,7 +488,8 @@ class CharpyLateralExpansionMeasurer:
             
             # 6. Measure lateral expansion
             expansion_data = self.measure_lateral_expansion(top_left, top_right, 
-                                                          left_perp, right_perp)
+                                                          left_perp, right_perp,
+                                                          bottom_left, bottom_right)
             
             # 7. Convert to mm if calibration available
             left_mm = self.pixels_to_mm(expansion_data['left_expansion_pixels'])
