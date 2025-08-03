@@ -4,6 +4,12 @@ Batch Model Tester
 
 Tests both YOLO detection and shear regression models on sample images from a directory.
 Perfect for testing when your camera is faulty.
+
+RECENT UPDATES:
+- Updated to use robust_shear_debug_model.pkl (new classification model)
+- Added grayscale conversion for shear prediction (model was trained on grayscale images)
+- YOLO detection still uses original color images
+- Shear prediction now uses grayscale converted images
 """
 
 import cv2
@@ -38,6 +44,19 @@ except ImportError as e:
     print("Will use fallback prediction method")
     CLASSIFICATION_AVAILABLE = False
 
+# Import improved shear regression model
+try:
+    # Add the regression model path
+    regression_path = src_path.parent / "tools" / "regression_model"
+    sys.path.insert(0, str(regression_path))
+    
+    from shear_surface_classifer import ImprovedShearRegressionModel, ImprovedShearFeatures
+    IMPROVED_SHEAR_AVAILABLE = True
+    print("✅ Improved shear regression model available")
+except ImportError as e:
+    print(f"⚠️ Improved shear regression model not available: {e}")
+    IMPROVED_SHEAR_AVAILABLE = False
+
 # YOLO imports
 try:
     from ultralytics import YOLO
@@ -55,12 +74,338 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder for NumPy data types."""
+    
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        return super(NumpyEncoder, self).default(obj)
+
+
+class ImprovedShearModelWrapper:
+    """Wrapper for the new ImprovedShearRegressionModel saved as dictionary."""
+    
+    def __init__(self, model_dict: Dict[str, Any]):
+        self.model_dict = model_dict
+        # Handle both 'model' (singular) and 'models' (plural) formats
+        self.model = model_dict.get('model') or model_dict.get('models')
+        self.scaler = model_dict.get('scaler')
+        self.feature_names = model_dict.get('feature_names', [])
+        self.model_type = model_dict.get('model_type', 'ensemble')
+        self.version = model_dict.get('version', '1.0')
+        
+        # Feature mapping for robust_shear_debug_model compatibility
+        self.expected_features = [
+            'surface_roughness', 'texture_energy', 'edge_density', 'edge_strength',
+            'bright_area_ratio', 'dark_area_ratio', 'global_contrast', 'local_contrast_mean',
+            'high_freq_ratio', 'intensity_skewness', 'intensity_kurtosis'
+        ]
+        
+        # Initialize the improved shear regression model components if available
+        if IMPROVED_SHEAR_AVAILABLE:
+            # Create a new ImprovedShearRegressionModel instance
+            self.shear_model = ImprovedShearRegressionModel(model_type=self.model_type)
+            # Set the trained components
+            self.shear_model.model = self.model
+            self.shear_model.scaler = self.scaler
+            self.shear_model.is_trained = True
+            logger.info("✅ ImprovedShearRegressionModel wrapper initialized")
+        else:
+            self.shear_model = None
+            logger.warning("⚠️ ImprovedShearRegressionModel not available - using fallback")
+        
+        logger.info(f"ImprovedShearModelWrapper initialized with version {self.version}")
+        logger.info(f"Model type: {self.model_type}")
+        logger.info(f"Feature count: {len(self.feature_names)}")
+    
+
+    
+    def predict_shear_percentage(self, image: np.ndarray) -> Dict[str, Any]:
+        """
+        Predict shear percentage from image using the improved shear model.
+        """
+        try:
+            # Check if this is the robust_shear_debug_model (version 3.0_debug) that needs feature mapping
+            if self.version == '3.0_debug' or len(self.feature_names) == 11:
+                # Use direct prediction with feature mapping for robust_shear_debug_model
+                logger.info("Using feature mapping for robust_shear_debug_model")
+                return self._predict_with_feature_mapping(image)
+            elif self.shear_model is not None and IMPROVED_SHEAR_AVAILABLE:
+                # Use the proper ImprovedShearRegressionModel for other versions
+                return self.shear_model.predict_shear_percentage(image)
+            else:
+                # Fallback to simple prediction
+                return self._fallback_prediction(image)
+                
+        except Exception as e:
+            logger.error(f"Improved shear model prediction failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'success': False,
+                'error': f'Improved shear model prediction failed: {e}',
+                'shear_percentage': None,
+                'confidence': 0.0
+            }
+    
+    def _predict_with_feature_mapping(self, image: np.ndarray) -> Dict[str, Any]:
+        """
+        Predict using the robust feature extraction pipeline that matches the training.
+        """
+        try:
+            # Use the same feature extraction pipeline as the training
+            features_array = self._extract_robust_features(image)
+            
+            # Scale features if scaler is available
+            if self.scaler is not None:
+                features_scaled = self.scaler.transform(features_array.reshape(1, -1))
+            else:
+                features_scaled = features_array.reshape(1, -1)
+                logger.warning("No scaler available - using raw features")
+            
+            # Make prediction using ensemble approach
+            if self.model is None:
+                raise ValueError("No model available for prediction")
+            
+            # Handle ensemble models (dictionary of models)
+            if isinstance(self.model, dict):
+                # Use ensemble prediction (average of all models)
+                predictions = []
+                for model_name, model in self.model.items():
+                    if hasattr(model, 'predict'):
+                        pred = model.predict(features_scaled)[0]
+                        predictions.append(pred)
+                        logger.debug(f"Model {model_name} prediction: {pred:.2f}")
+                
+                if predictions:
+                    prediction = np.mean(predictions)  # Ensemble average
+                    logger.info(f"Ensemble prediction from {len(predictions)} models: {prediction:.2f}")
+                else:
+                    raise ValueError("No valid models found in ensemble")
+            else:
+                # Single model prediction
+                prediction = self.model.predict(features_scaled)[0]
+            
+            prediction = np.clip(prediction, 0.0, 100.0)  # Constrain to valid range
+            
+            # Calculate confidence if possible
+            confidence = self._calculate_confidence(features_scaled)
+            
+            return {
+                'success': True,
+                'shear_percentage': float(prediction),
+                'confidence': float(confidence),
+                'features_extracted_correctly': True,
+                'feature_count': features_array.shape[0],
+                'prediction_category': self._categorize_shear(prediction),
+                'method': f'robust_debug_model_{self.model_type}'
+            }
+            
+        except Exception as e:
+            logger.error(f"Feature mapping prediction failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._fallback_prediction(image)
+    
+    def _extract_robust_features(self, image: np.ndarray) -> np.ndarray:
+        """
+        Extract robust features using the same pipeline as the training.
+        This matches the RobustFeatureExtractor from shear_surface_debug.py
+        """
+        from scipy import stats
+        
+        # Preprocess image (same as training)
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+        
+        # Resize to standard size (256x256 as in training)
+        target_size = (256, 256)
+        resized = cv2.resize(gray, target_size)
+        
+        # Apply CLAHE for contrast normalization (same as training)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        processed = clahe.apply(resized)
+        
+        # Extract the same 11 features as in training
+        
+        # 1. Surface roughness
+        surface_roughness = np.std(processed)
+        
+        # 2. Texture energy (simplified GLCM)
+        texture_energy = self._compute_texture_energy(processed)
+        
+        # 3. Edge density
+        edges = cv2.Canny(processed, 50, 150)
+        edge_density = np.sum(edges > 0) / edges.size
+        
+        # 4. Edge strength
+        grad_x = cv2.Sobel(processed, cv2.CV_64F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(processed, cv2.CV_64F, 0, 1, ksize=3)
+        grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
+        edge_strength = np.mean(grad_mag)
+        
+        # 5-6. Bright and dark area ratios
+        _, binary = cv2.threshold(processed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        bright_pixels = np.sum(binary > 0)
+        dark_pixels = np.sum(binary == 0)
+        total_pixels = processed.size
+        bright_area_ratio = bright_pixels / total_pixels
+        dark_area_ratio = dark_pixels / total_pixels
+        
+        # 7. Global contrast
+        p5, p95 = np.percentile(processed, [5, 95])
+        global_contrast = p95 - p5
+        
+        # 8. Local contrast mean
+        kernel_size = 9
+        kernel = np.ones((kernel_size, kernel_size)) / (kernel_size ** 2)
+        local_mean = cv2.filter2D(processed.astype(float), -1, kernel)
+        local_var = cv2.filter2D((processed.astype(float) - local_mean) ** 2, -1, kernel)
+        local_contrast_mean = np.mean(np.sqrt(local_var))
+        
+        # 9. High frequency ratio
+        f_transform = np.fft.fft2(processed)
+        f_shift = np.fft.fftshift(f_transform)
+        magnitude_spectrum = np.abs(f_shift)
+        
+        center_y, center_x = processed.shape[0] // 2, processed.shape[1] // 2
+        y, x = np.ogrid[:processed.shape[0], :processed.shape[1]]
+        mask_low = (x - center_x) ** 2 + (y - center_y) ** 2 <= (min(processed.shape) // 4) ** 2
+        
+        low_freq_energy = np.sum(magnitude_spectrum[mask_low])
+        high_freq_energy = np.sum(magnitude_spectrum[~mask_low])
+        total_energy = low_freq_energy + high_freq_energy
+        high_freq_ratio = high_freq_energy / (total_energy + 1e-6)
+        
+        # 10-11. Statistical moments
+        intensity_skewness = stats.skew(processed.flatten())
+        intensity_kurtosis = stats.kurtosis(processed.flatten())
+        
+        # Return as array matching the training feature order
+        return np.array([
+            surface_roughness, texture_energy,
+            edge_density, edge_strength,
+            bright_area_ratio, dark_area_ratio,
+            global_contrast, local_contrast_mean,
+            high_freq_ratio,
+            intensity_skewness, intensity_kurtosis
+        ])
+    
+    def _compute_texture_energy(self, image: np.ndarray) -> float:
+        """Compute texture energy using simplified GLCM."""
+        # Quantize to 16 levels for faster computation
+        levels = 16
+        quantized = (image // (256 // levels)).astype(np.uint8)
+        
+        # Compute co-occurrence matrix for horizontal direction
+        glcm = np.zeros((levels, levels))
+        for i in range(image.shape[0]):
+            for j in range(image.shape[1] - 1):
+                glcm[quantized[i, j], quantized[i, j + 1]] += 1
+        
+        # Normalize
+        glcm = glcm / (np.sum(glcm) + 1e-6)
+        
+        # Return energy (sum of squared elements)
+        return np.sum(glcm ** 2)
+    
+    def _calculate_confidence(self, feature_vector_scaled: np.ndarray) -> float:
+        """Calculate prediction confidence."""
+        try:
+            # Handle ensemble models (dictionary of models)
+            if isinstance(self.model, dict):
+                # Calculate confidence based on agreement between ensemble models
+                predictions = []
+                for model_name, model in self.model.items():
+                    if hasattr(model, 'predict'):
+                        pred = model.predict(feature_vector_scaled)[0]
+                        predictions.append(pred)
+                
+                if len(predictions) > 1:
+                    prediction_std = np.std(predictions)
+                    confidence = max(0.0, 1.0 - (prediction_std / 50.0))  # Normalize to 0-1
+                    return confidence
+                else:
+                    return 0.7
+            
+            # For single ensemble models (like RandomForest), use tree variance
+            elif hasattr(self.model, 'estimators_'):
+                tree_predictions = [tree.predict(feature_vector_scaled)[0] for tree in self.model.estimators_]
+                prediction_std = np.std(tree_predictions)
+                confidence = max(0.0, 1.0 - (prediction_std / 50.0))  # Normalize to 0-1
+                return confidence
+            else:
+                # For other models, return default confidence
+                return 0.7
+        except Exception:
+            return 0.5
+    
+    def _categorize_shear(self, prediction: float) -> str:
+        """Categorize shear percentage into descriptive ranges."""
+        if prediction <= 15:
+            return "Low Shear (Brittle)"
+        elif prediction <= 35:
+            return "Low-Medium Shear"
+        elif prediction <= 65:
+            return "Medium Shear"
+        elif prediction <= 85:
+            return "Medium-High Shear"
+        else:
+            return "High Shear (Ductile)"
+    
+    def _fallback_prediction(self, image: np.ndarray) -> Dict[str, Any]:
+        """Fallback prediction when improved model is not available."""
+        try:
+            # Simple image-based heuristic as fallback
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+            
+            # Calculate basic image statistics as a rough estimate
+            mean_intensity = np.mean(gray)
+            std_intensity = np.std(gray)
+            
+            # Very rough heuristic: brighter, more uniform surfaces tend to be more ductile
+            normalized_intensity = (mean_intensity - 50) / 100
+            uniformity = max(0, 1 - (std_intensity / 100))
+            
+            # Combine factors for rough estimate
+            rough_estimate = 50 + (normalized_intensity * 30) + (uniformity * 20)
+            rough_estimate = np.clip(rough_estimate, 0, 100)
+            
+            logger.warning("Using fallback prediction for improved shear model - not scientifically accurate!")
+            
+            return {
+                'success': True,
+                'shear_percentage': float(rough_estimate),
+                'confidence': 0.3,  # Low confidence for fallback
+                'method': 'improved_fallback_heuristic',
+                'note': 'Fallback prediction used - improved shear model components not available'
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'Improved model fallback prediction failed: {e}',
+                'shear_percentage': None,
+                'confidence': 0.0
+            }
+
+
 class DictModelWrapper:
     """Wrapper for dictionary-based models to provide predict_shear_percentage interface."""
     
     def __init__(self, model_dict: Dict[str, Any]):
         self.model_dict = model_dict
-        self.model = model_dict.get('model')
+        # Handle both 'model' (singular) and 'models' (plural) formats
+        self.model = model_dict.get('model') or model_dict.get('models')
         self.scaler = model_dict.get('scaler')
         self.feature_names = model_dict.get('feature_names', [])
         self.model_type = model_dict.get('model_type', 'unknown')
@@ -333,14 +678,26 @@ class BatchModelTester:
                 # Handle dictionary format - might contain model components
                 logger.info(f"Loaded dictionary with keys: {list(model_data.keys())}")
                 
-                # Try to create a wrapper class or use the dictionary directly
-                if 'model' in model_data or 'classifier' in model_data:
+                # Check if it's the new improved shear model format
+                if 'version' in model_data and model_data.get('version') == '2.0':
+                    # This is the new ImprovedShearRegressionModel format
+                    self.shear_classifier = ImprovedShearModelWrapper(model_data)
+                    logger.info("✅ Created wrapper for ImprovedShearRegressionModel (v2.0)")
+                elif 'model' in model_data and 'scaler' in model_data and 'feature_names' in model_data:
+                    # This looks like the improved shear model format (even without version)
+                    self.shear_classifier = ImprovedShearModelWrapper(model_data)
+                    logger.info("✅ Created wrapper for ImprovedShearRegressionModel (detected format)")
+                elif 'models' in model_data and 'scaler' in model_data and 'feature_names' in model_data:
+                    # This is the new robust shear debug model format with 'models' (plural)
+                    self.shear_classifier = ImprovedShearModelWrapper(model_data)
+                    logger.info("✅ Created wrapper for robust shear debug model (models plural format)")
+                elif 'model' in model_data or 'models' in model_data or 'classifier' in model_data:
                     # Create a simple wrapper for dictionary-based models
                     self.shear_classifier = DictModelWrapper(model_data)
                     logger.info("✅ Created wrapper for dictionary-based model")
                 else:
                     logger.error(f"Dictionary model format not supported. Keys: {list(model_data.keys())}")
-                    logger.info("Expected dictionary with 'model' or 'classifier' key, or ShinyRegionBasedClassifier object")
+                    logger.info("Expected dictionary with 'model' key (ImprovedShearRegressionModel) or 'classifier' key (legacy)")
                     return False
             else:
                 logger.error(f"Unknown model format: {type(model_data)}")
@@ -403,17 +760,21 @@ class BatchModelTester:
                 logger.warning(f"Could not load image: {image_file}")
                 continue
 
-            # Run YOLO detection
+            # Convert to grayscale for shear prediction (model was trained on grayscale)
+            gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+            # Run YOLO detection (uses original color image)
             detections = self._detect_fractures(image)
 
-            # Run shear prediction
-            shear_result = self._predict_shear(image)
+            # Run shear prediction (uses grayscale image)
+            shear_result = self._predict_shear(gray_image)
 
             # Store results
             result = {
                 'filename': image_file.name,
                 'filepath': str(image_file),
-                'image_shape': image.shape,
+                'image_shape': image.shape,  # Original color image shape
+                'gray_image_shape': gray_image.shape,  # Grayscale image shape used for shear prediction
                 'detections': detections,
                 'shear_prediction': shear_result,
                 'processing_time': time.time() - start_time
@@ -535,6 +896,8 @@ class BatchModelTester:
             # Convert numpy arrays to lists
             if 'image_shape' in serializable_result:
                 serializable_result['image_shape'] = list(serializable_result['image_shape'])
+            if 'gray_image_shape' in serializable_result:
+                serializable_result['gray_image_shape'] = list(serializable_result['gray_image_shape'])
             serializable_results.append(serializable_result)
 
         output_data = {
@@ -548,7 +911,7 @@ class BatchModelTester:
         }
 
         with open(filename, 'w') as f:
-            json.dump(output_data, f, indent=2)
+            json.dump(output_data, f, indent=2, cls=NumpyEncoder)
 
         logger.info(f"Results saved to: {filename}")
         return filename
@@ -717,7 +1080,7 @@ def main():
     # Default paths relative to project root - adjust these to match your setup
     # These are example paths - update them to point to your actual model files
     yolo_model_path = "models/detection/charpy_3class/charpy_3class_20250729_110009/weights/best.pt"  # Update this path to your YOLO model
-    regression_model_path = "models/classification/charpy_shear_regressor.pkl"  # Update this path to your regression model
+    regression_model_path = "models/classification/robust_shear_debug_model.pkl"  # Updated to use the new robust shear debug model
     test_images_dir = "data/raw/charpy_dataset_v2/images/test"  # Directory containing test images
 
     print("🔬 BATCH MODEL TESTER")

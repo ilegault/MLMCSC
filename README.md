@@ -7,6 +7,8 @@ A comprehensive system for real-time microscope control and Charpy fracture surf
 - **Live Microscope Control**: Real-time camera interface with calibration
 - **YOLO Object Detection**: Automatic fracture surface detection
 - **Shear Classification**: ML-based shear percentage estimation
+- **Human-in-the-Loop Interface**: Web-based technician labeling system
+- **Online Learning**: Continuous model improvement from user feedback
 - **Real-time Analysis**: Live processing and visualization
 - **Modular Architecture**: Clean, extensible codebase
 - **Research-Oriented**: Organized for experiments and development
@@ -24,10 +26,16 @@ MLMCSC/
 │   │   ├── preprocessing/    # Data preprocessing
 │   │   ├── utils/            # Utilities
 │   │   └── config/           # Configuration
-│   └── apps/                 # Applications
-│       ├── live_viewer/      # Live microscope viewer
-│       ├── trainer/          # Model training
-│       └── analyzer/         # Analysis tools
+│   ├── apps/                 # Applications
+│   │   ├── live_viewer/      # Live microscope viewer
+│   │   ├── trainer/          # Model training
+│   │   └── analyzer/         # Analysis tools
+│   └── web/                  # Human-in-the-Loop Interface
+│       ├── api.py           # FastAPI backend
+│       ├── database.py      # Database management
+│       ├── online_learning.py # Online learning system
+│       ├── static/          # Frontend assets
+│       └── templates/       # HTML templates
 ├── 📁 experiments/           # Research experiments
 │   ├── detection/           # Detection experiments
 │   ├── classification/      # Classification experiments
@@ -137,15 +145,76 @@ Or import the compatibility layer:
 import compatibility  # Provides backward compatibility
 ```
 
+## 🌐 Human-in-the-Loop Web Interface
+
+The MLMCSC system includes a comprehensive web interface for technicians to provide feedback and improve model performance through continuous learning.
+
+### Quick Start
+
+**Option 1: Using Batch Script (Windows)**
+```bash
+# Double-click or run from command line
+start_web_interface.bat
+```
+
+**Option 2: Using PowerShell (Windows)**
+```powershell
+# Run from PowerShell
+.\start_web_interface.ps1
+```
+
+**Option 3: Manual Start**
+```bash
+cd src/web
+python run_server.py
+```
+
+Then open http://localhost:8000 in your web browser.
+
+### Features
+
+- **🖼️ Image Analysis**: Drag & drop image upload with YOLO detection overlay
+- **🏷️ Interactive Labeling**: Slider-based shear percentage input (0-100%)
+- **📊 Real-time Metrics**: Live model performance monitoring
+- **📋 History Tracking**: Complete labeling history with export functionality
+- **🔄 Online Learning**: Automatic model updates based on technician feedback
+- **📱 Responsive Design**: Works on desktop, tablet, and mobile devices
+
+### API Endpoints
+
+- `POST /predict` - Get model prediction for uploaded image
+- `POST /submit_label` - Submit technician's label for training
+- `GET /get_metrics` - View model performance metrics
+- `GET /get_history` - View labeling history with pagination
+- `GET /export_history` - Export complete history as CSV
+- `GET /health` - System health check
+
+### Configuration
+
+Create `src/web/config.json`:
+```json
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": false,
+    "online_learning_enabled": true,
+    "update_threshold": 10,
+    "update_interval": 300
+}
+```
+
+For detailed documentation, see [src/web/README.md](src/web/README.md).
+
 ## 📊 Usage Examples
 
 ### Live Viewer with Custom Models
+
 ```python
 from apps.live_viewer import WorkingLiveMicroscopeViewer
 
 viewer = WorkingLiveMicroscopeViewer(
-    yolo_model_path="models/detection/my_model.pt",
-    regression_model_path="models/classification/my_classifier.pkl"
+    yolo_model_path="src/models/detection/my_model.pt",
+    regression_model_path="src/models/classification/my_classifier.pkl"
 )
 
 viewer.load_calibration()

@@ -332,7 +332,7 @@ def main():
     print("🔄 Step 1: Creating augmented training data...")
     success = trainer.create_training_data_from_manual_crops(
         manual_samples_dir=manual_dir,
-        output_dir="../../data/samples/shiny_training_data",
+        output_dir="../../../database/samples/shiny_training_data",
         samples_per_class=25  # 1 original + 24 augmented = 25 per class
     )
 

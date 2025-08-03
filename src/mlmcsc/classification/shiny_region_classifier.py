@@ -13,8 +13,8 @@ import pickle
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 
-from improved_fracture_detector import ImprovedFractureSurfaceDetector
-from shiny_region_analyzer import ShinyRegionAnalyzer, ShinyRegionFeatures
+from .improved_fracture_detector import ImprovedFractureSurfaceDetector
+from .shiny_region_analyzer import ShinyRegionAnalyzer, ShinyRegionFeatures
 
 logger = logging.getLogger(__name__)
 

@@ -32,7 +32,7 @@ except ImportError as e:
     print(f"Warning: Could not import detection module: {e}")
 
 try:
-    from .classification import *
+    from . import classification
 except ImportError as e:
     print(f"Warning: Could not import classification module: {e}")
 

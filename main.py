@@ -163,7 +163,7 @@ def run_analysis(args):
     
     if args.target == 'dataset':
         try:
-            from tools.analyze_dataset import main as analyze_dataset
+            from src.apps.analyzer.analyze_dataset import main as analyze_dataset
             analyze_dataset()
         except ImportError:
             print("Dataset analysis tool not available")
