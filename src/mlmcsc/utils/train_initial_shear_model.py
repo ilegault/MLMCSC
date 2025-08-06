@@ -43,6 +43,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def convert_numpy_types(obj):
+    """Convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
+
+
 class InitialShearModelTrainer:
     """Trainer for the initial shear percentage prediction model."""
     
@@ -82,11 +98,30 @@ class InitialShearModelTrainer:
         """Load the trained YOLO model for fracture surface detection."""
         try:
             logger.info("Loading YOLO model...")
-            self.yolo_model = YOLO(str(self.yolo_model_path))
-            logger.info("YOLO model loaded successfully")
+            
+            # Check if the specific model exists
+            if not self.yolo_model_path.exists():
+                logger.warning(f"Specific YOLO model not found: {self.yolo_model_path}")
+                logger.info("Attempting to use a pre-trained YOLO model as fallback...")
+                
+                # Try to use a pre-trained YOLOv8 model as fallback
+                try:
+                    self.yolo_model = YOLO('yolov8n.pt')  # This will download if not present
+                    logger.info("Using pre-trained YOLOv8n model as fallback")
+                    logger.warning("Note: This model is not specifically trained for fracture detection")
+                    logger.warning("Results may be less accurate - consider training a specific model")
+                except Exception as fallback_error:
+                    logger.error(f"Failed to load fallback YOLO model: {fallback_error}")
+                    logger.info("Proceeding without YOLO detection - will use full images")
+                    self.yolo_model = None
+            else:
+                self.yolo_model = YOLO(str(self.yolo_model_path))
+                logger.info("YOLO model loaded successfully")
+                
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
-            raise
+            logger.info("Proceeding without YOLO detection - will use full images")
+            self.yolo_model = None
     
     def initialize_feature_extractor(self):
         """Initialize the feature extraction pipeline."""
@@ -158,53 +193,82 @@ class InitialShearModelTrainer:
             successful_detections = 0
             failed_detections = 0
             
-            for i, sample in enumerate(tqdm(self.training_samples, desc="Detecting fracture surfaces")):
-                try:
-                    # Load image
-                    image_path = sample['image_path']
-                    image = cv2.imread(str(image_path))
-                    
-                    if image is None:
-                        logger.warning(f"Could not load image: {image_path}")
-                        failed_detections += 1
-                        continue
-                    
-                    # Run YOLO detection
-                    results = self.yolo_model(image, verbose=False)
-                    
-                    # Find fracture surface detection (class 2)
-                    fracture_detections = []
-                    for result in results:
-                        if result.boxes is not None:
-                            for box in result.boxes:
-                                if int(box.cls) == 2:  # fracture_surface class
-                                    # Convert to [x, y, width, height] format
-                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                                    bbox = [x1, y1, x2-x1, y2-y1]
-                                    confidence = float(box.conf)
-                                    fracture_detections.append({
-                                        'bbox': bbox,
-                                        'confidence': confidence
-                                    })
-                    
-                    if fracture_detections:
-                        # Use the detection with highest confidence
-                        best_detection = max(fracture_detections, key=lambda x: x['confidence'])
-                        sample['fracture_bbox'] = best_detection['bbox']
-                        sample['detection_confidence'] = best_detection['confidence']
-                        successful_detections += 1
-                    else:
-                        logger.warning(f"No fracture surface detected in {image_path}")
-                        # Use full image as fallback
+            # Check if YOLO model is available
+            if self.yolo_model is None:
+                logger.info("No YOLO model available - using full images for feature extraction")
+                for sample in tqdm(self.training_samples, desc="Processing images (full image)"):
+                    try:
+                        # Load image to get dimensions
+                        image_path = sample['image_path']
+                        image = cv2.imread(str(image_path))
+                        
+                        if image is None:
+                            logger.warning(f"Could not load image: {image_path}")
+                            failed_detections += 1
+                            continue
+                        
+                        # Use full image
                         h, w = image.shape[:2]
                         sample['fracture_bbox'] = [0, 0, w, h]
-                        sample['detection_confidence'] = 0.0
-                        failed_detections += 1
+                        sample['detection_confidence'] = 1.0  # Full confidence for full image
+                        successful_detections += 1
                         
-                except Exception as e:
-                    logger.error(f"Detection failed for {sample['image_path']}: {e}")
-                    failed_detections += 1
-                    continue
+                    except Exception as e:
+                        logger.error(f"Processing failed for {sample['image_path']}: {e}")
+                        failed_detections += 1
+                        continue
+            else:
+                # Use YOLO model for detection
+                for i, sample in enumerate(tqdm(self.training_samples, desc="Detecting fracture surfaces")):
+                    try:
+                        # Load image
+                        image_path = sample['image_path']
+                        image = cv2.imread(str(image_path))
+                        
+                        if image is None:
+                            logger.warning(f"Could not load image: {image_path}")
+                            failed_detections += 1
+                            continue
+                        
+                        # Run YOLO detection
+                        results = self.yolo_model(image, verbose=False)
+                        
+                        # Find fracture surface detection (class 2 for specific model, or any object for fallback)
+                        fracture_detections = []
+                        for result in results:
+                            if result.boxes is not None:
+                                for box in result.boxes:
+                                    # For fallback model, accept any detection
+                                    # For specific model, look for class 2 (fracture_surface)
+                                    if (str(self.yolo_model_path).endswith('best.pt') and int(box.cls) == 2) or \
+                                       (not str(self.yolo_model_path).endswith('best.pt')):
+                                        # Convert to [x, y, width, height] format
+                                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                        bbox = [x1, y1, x2-x1, y2-y1]
+                                        confidence = float(box.conf)
+                                        fracture_detections.append({
+                                            'bbox': bbox,
+                                            'confidence': confidence
+                                        })
+                        
+                        if fracture_detections:
+                            # Use the detection with highest confidence
+                            best_detection = max(fracture_detections, key=lambda x: x['confidence'])
+                            sample['fracture_bbox'] = best_detection['bbox']
+                            sample['detection_confidence'] = best_detection['confidence']
+                            successful_detections += 1
+                        else:
+                            logger.warning(f"No fracture surface detected in {image_path}")
+                            # Use full image as fallback
+                            h, w = image.shape[:2]
+                            sample['fracture_bbox'] = [0, 0, w, h]
+                            sample['detection_confidence'] = 0.0
+                            failed_detections += 1
+                            
+                    except Exception as e:
+                        logger.error(f"Detection failed for {sample['image_path']}: {e}")
+                        failed_detections += 1
+                        continue
             
             logger.info(f"Fracture surface detection completed:")
             logger.info(f"  Successful detections: {successful_detections}")
@@ -263,7 +327,7 @@ class InitialShearModelTrainer:
             
             # Prepare feature data
             feature_vectors = [result.feature_vector for result in self.extracted_features]
-            feature_names = self.extracted_features[0].feature_names if self.extracted_features else []
+            feature_names = self.feature_extractor.get_feature_names() if self.feature_extractor else []
             
             # Split data for evaluation
             X_train, X_test, y_train, y_test = train_test_split(
@@ -421,6 +485,9 @@ class InitialShearModelTrainer:
                 'preprocessing_config': self.feature_extractor.preprocessing_config
             }
             
+            # Convert numpy types to JSON-serializable types
+            extractor_config = convert_numpy_types(extractor_config)
+            
             config_file = self.output_dir / 'feature_extractor_config.json'
             with open(config_file, 'w') as f:
                 json.dump(extractor_config, f, indent=2)
@@ -444,6 +511,9 @@ class InitialShearModelTrainer:
             for sample in self.training_samples:
                 shear = sample['shear_percentage']
                 metadata['sample_distribution'][str(shear)] = metadata['sample_distribution'].get(str(shear), 0) + 1
+            
+            # Convert numpy types to JSON-serializable types
+            metadata = convert_numpy_types(metadata)
             
             metadata_file = self.output_dir / 'training_metadata.json'
             with open(metadata_file, 'w') as f:
@@ -478,7 +548,7 @@ class InitialShearModelTrainer:
             # 2. Prediction vs Actual scatter plot
             if self.online_learner and len(self.extracted_features) > 0:
                 feature_data = [{'feature_vector': result.feature_vector, 
-                               'feature_names': result.feature_names} 
+                               'feature_names': self.feature_extractor.get_feature_names()} 
                               for result in self.extracted_features]
                 predictions = self.online_learner.predict(feature_data)
                 
@@ -533,7 +603,7 @@ class InitialShearModelTrainer:
             logger.info("STARTING INITIAL SHEAR MODEL TRAINING")
             logger.info("=" * 60)
             
-            # Step 1: Load YOLO model
+            # Step 1: Load YOLO model (non-critical - can proceed without it)
             self.load_yolo_model()
             
             # Step 2: Initialize feature extractor
@@ -542,7 +612,7 @@ class InitialShearModelTrainer:
             # Step 3: Load training samples
             self.load_training_samples()
             
-            # Step 4: Detect fracture surfaces
+            # Step 4: Detect fracture surfaces (or use full images)
             self.detect_fracture_surfaces()
             
             # Step 5: Extract features

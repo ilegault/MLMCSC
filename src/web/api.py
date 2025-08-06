@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
@@ -22,7 +23,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -49,10 +50,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting MLMCSC Human-in-the-Loop API...")
     init_database()
     load_models()
+    # Initialize pending samples storage
+    app.state.pending_samples = []
     logger.info("API startup complete")
     yield
     # Shutdown
     logger.info("Shutting down API...")
+    # Release camera resources
+    release_camera()
+    logger.info("API shutdown complete")
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -126,6 +132,15 @@ regression_model: Optional[FractureRegressionModel] = None
 online_learner: Optional[OnlineLearningSystem] = None
 feature_extractor: Optional[FractureFeatureExtractor] = None
 db_manager: Optional[DatabaseManager] = None
+
+# Global camera instance for live microscope feed
+camera: Optional[cv2.VideoCapture] = None
+camera_active: bool = False
+camera_last_frame_time: float = 0
+camera_failure_count: int = 0
+
+# Online learning configuration
+MIN_SAMPLES_FOR_INIT = 10  # Need at least 10 samples for meaningful initialization
 
 # Database setup
 DB_PATH = Path(__file__).parent / "data" / "labeling_history.db"
@@ -238,11 +253,9 @@ def load_models():
                 logger.info("Online learning model loaded from saved state")
             except Exception as e:
                 logger.warning(f"Could not load online model: {e}")
-                # Initialize with some dummy data if available
-                _initialize_online_model()
+                # Will initialize when first needed
         else:
-            logger.info("No existing online model found, will initialize on first use")
-            _initialize_online_model()
+            logger.info("No existing online model found, will initialize when first needed")
             
     except Exception as e:
         logger.error(f"Error loading models: {e}")
@@ -263,7 +276,7 @@ def _initialize_online_model():
         # Get existing labels from database
         labels = db_manager.get_labels(limit=1000)  # Get up to 1000 labels
         
-        if len(labels) >= 10:  # Need minimum samples for initialization
+        if len(labels) >= MIN_SAMPLES_FOR_INIT:  # Need minimum samples for initialization
             logger.info(f"Initializing online model with {len(labels)} existing labels")
             
             # Extract features from stored labels
@@ -296,7 +309,7 @@ def _initialize_online_model():
                     logger.warning(f"Failed to process label {label.id}: {e}")
                     continue
             
-            if len(feature_data) >= 10:
+            if len(feature_data) >= MIN_SAMPLES_FOR_INIT:
                 # Initialize the online model
                 performance = online_learner.initialize_model(feature_data, target_values)
                 logger.info(f"Online model initialized with R²: {performance.get('r2', 0):.3f}")
@@ -420,8 +433,8 @@ async def root():
         </html>
         """)
 
-@app.post("/predict", response_model=PredictionResponse)
-async def predict_image(request: PredictionRequest):
+@app.post("/predict")
+async def predict_image(request: PredictionRequest, allow_no_specimens: bool = False):
     """Get model prediction for uploaded image."""
     try:
         start_time = datetime.now()
@@ -436,7 +449,16 @@ async def predict_image(request: PredictionRequest):
         detections = detector.detect_specimen(image)
         
         if not detections:
-            raise HTTPException(status_code=400, detail="No specimens detected in image")
+            if allow_no_specimens:
+                # Return a response indicating no specimens found
+                return {
+                    "status": "no_specimens",
+                    "message": "No specimens detected in image",
+                    "processing_time": (datetime.now() - start_time).total_seconds(),
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                raise HTTPException(status_code=400, detail="No specimens detected in image")
         
         # Use the first detection (most confident)
         detection = detections[0]
@@ -583,21 +605,63 @@ async def _process_online_learning(submission: LabelSubmission) -> Dict[str, Any
         
         # 3. Process through online learning system
         if not online_learner.is_initialized:
-            # Initialize with this first sample (need more samples in practice)
-            logger.info("Initializing online learner with first submission")
-            try:
-                performance = online_learner.initialize_model(
-                    feature_data=[feature_data],
-                    target_values=[submission.technician_label]
-                )
+            # Store samples until we have enough for meaningful initialization
+            if not hasattr(app.state, 'pending_samples'):
+                app.state.pending_samples = []
+            
+            # Add new sample to pending
+            app.state.pending_samples.append({
+                'feature_data': feature_data,
+                'label': submission.technician_label,
+                'timestamp': datetime.now().isoformat(),
+                'technician_id': submission.technician_id,
+                'specimen_id': submission.specimen_id
+            })
+            
+            logger.info(f"Added sample to pending queue. Total pending: {len(app.state.pending_samples)}")
+            
+            # Initialize only when we have enough samples
+            if len(app.state.pending_samples) >= MIN_SAMPLES_FOR_INIT:
+                logger.info(f"Initializing online learner with {len(app.state.pending_samples)} samples")
+                try:
+                    feature_data_list = [s['feature_data'] for s in app.state.pending_samples]
+                    labels_list = [s['label'] for s in app.state.pending_samples]
+                    
+                    performance = online_learner.initialize_model(
+                        feature_data=feature_data_list,
+                        target_values=labels_list
+                    )
+                    
+                    # Clear pending samples after successful initialization
+                    app.state.pending_samples = []
+                    
+                    # Save the initialized model
+                    try:
+                        model_save_path = Path(__file__).parent / "models"
+                        model_save_path.mkdir(exist_ok=True)
+                        online_learner.save_model(model_save_path / "online_model.joblib")
+                        logger.info("Online model saved after initialization")
+                    except Exception as e:
+                        logger.warning(f"Failed to save online model: {e}")
+                    
+                    return {
+                        "status": "initialized",
+                        "message": f"Online learning system initialized with {len(labels_list)} samples",
+                        "initial_performance": performance,
+                        "samples_used": len(labels_list)
+                    }
+                except Exception as e:
+                    logger.error(f"Failed to initialize online learner: {e}")
+                    return {"status": "error", "message": f"Initialization failed: {e}"}
+            else:
+                # Not enough samples yet
+                remaining = MIN_SAMPLES_FOR_INIT - len(app.state.pending_samples)
                 return {
-                    "status": "initialized",
-                    "message": "Online learning system initialized",
-                    "initial_performance": performance
+                    "status": "pending",
+                    "message": f"Sample stored. Need {remaining} more samples for initialization",
+                    "pending_count": len(app.state.pending_samples),
+                    "required_count": MIN_SAMPLES_FOR_INIT
                 }
-            except Exception as e:
-                logger.error(f"Failed to initialize online learner: {e}")
-                return {"status": "error", "message": f"Initialization failed: {e}"}
         
         # 4. Process technician submission through online learning pipeline
         result = online_learner.process_technician_submission(
@@ -623,6 +687,87 @@ async def _process_online_learning(submission: LabelSubmission) -> Dict[str, Any
     except Exception as e:
         logger.error(f"Error in online learning pipeline: {e}")
         return {"status": "error", "message": str(e)}
+
+@app.get("/get_pending_status")
+async def get_pending_status():
+    """Get status of pending samples for online learning initialization."""
+    try:
+        global online_learner
+        
+        if not hasattr(app.state, 'pending_samples'):
+            app.state.pending_samples = []
+        
+        is_initialized = online_learner.is_initialized if online_learner else False
+        pending_count = len(app.state.pending_samples)
+        
+        return {
+            "is_initialized": is_initialized,
+            "pending_count": pending_count,
+            "required_count": MIN_SAMPLES_FOR_INIT,
+            "remaining_needed": max(0, MIN_SAMPLES_FOR_INIT - pending_count) if not is_initialized else 0,
+            "status": "initialized" if is_initialized else ("collecting" if pending_count > 0 else "waiting")
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting pending status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/force_initialize")
+async def force_initialize(min_samples: int = 5):
+    """Force initialization of online learning model with current pending samples."""
+    try:
+        global online_learner
+        
+        if not online_learner:
+            raise HTTPException(status_code=500, detail="Online learner not available")
+        
+        if online_learner.is_initialized:
+            return {"status": "already_initialized", "message": "Model is already initialized"}
+        
+        if not hasattr(app.state, 'pending_samples'):
+            app.state.pending_samples = []
+        
+        if len(app.state.pending_samples) < min_samples:
+            return {
+                "status": "insufficient_samples",
+                "message": f"Need at least {min_samples} samples, have {len(app.state.pending_samples)}",
+                "pending_count": len(app.state.pending_samples)
+            }
+        
+        # Force initialization with available samples
+        logger.info(f"Force initializing online learner with {len(app.state.pending_samples)} samples")
+        
+        feature_data_list = [s['feature_data'] for s in app.state.pending_samples]
+        labels_list = [s['label'] for s in app.state.pending_samples]
+        
+        performance = online_learner.initialize_model(
+            feature_data=feature_data_list,
+            target_values=labels_list
+        )
+        
+        # Clear pending samples after initialization
+        samples_used = len(app.state.pending_samples)
+        app.state.pending_samples = []
+        
+        # Save the initialized model
+        try:
+            model_save_path = Path(__file__).parent / "models"
+            model_save_path.mkdir(exist_ok=True)
+            online_learner.save_model(model_save_path / "online_model.joblib")
+            logger.info("Online model saved after force initialization")
+        except Exception as e:
+            logger.warning(f"Failed to save online model: {e}")
+        
+        return {
+            "status": "force_initialized",
+            "message": f"Model force initialized with {samples_used} samples",
+            "initial_performance": performance,
+            "samples_used": samples_used
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in force initialization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/get_metrics", response_model=MetricsResponse)
 async def get_metrics():
@@ -793,6 +938,440 @@ async def export_history():
         logger.error(f"Error exporting history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Live Microscope Video Streaming Endpoints
+
+def initialize_camera(camera_id: int = 0) -> bool:
+    """Initialize the microscope camera with fast startup and better stability."""
+    global camera, camera_active
+    
+    try:
+        # Release existing camera if any
+        if camera is not None:
+            camera.release()
+            camera = None
+            time.sleep(0.1)  # Brief pause for camera cleanup
+        
+        # Fast initialization - try DirectShow first (most common on Windows)
+        camera = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
+        
+        if not camera.isOpened():
+            # Fallback to default backend
+            camera = cv2.VideoCapture(camera_id)
+        
+        if not camera.isOpened():
+            camera_active = False
+            return False
+        
+        # Quick frame test (no detailed logging to speed up)
+        ret, test_frame = camera.read()
+        if not ret or test_frame is None:
+            camera.release()
+            camera = None
+            camera_active = False
+            return False
+        
+        # Set basic properties for stability
+        try:
+            # Set buffer size to prevent frame buildup
+            camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # Set reasonable resolution
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            # Set FPS (not too high to prevent freezing)
+            camera.set(cv2.CAP_PROP_FPS, 20)
+        except:
+            pass  # Ignore property setting errors
+        
+        camera_active = True
+        logger.info(f"Camera {camera_id} initialized")
+        return True
+        
+    except Exception as e:
+        logger.warning(f"Camera {camera_id} initialization failed: {e}")
+        if camera is not None:
+            camera.release()
+            camera = None
+        camera_active = False
+        return False
+
+def release_camera():
+    """Release the camera resource."""
+    global camera, camera_active
+    
+    try:
+        if camera is not None:
+            camera.release()
+            camera = None
+        camera_active = False
+        logger.info("Camera released")
+    except Exception as e:
+        logger.error(f"Error releasing camera: {e}")
+
+def check_camera_health() -> bool:
+    """Check if camera is healthy and attempt recovery if needed."""
+    global camera, camera_active, camera_failure_count, camera_last_frame_time
+    
+    if not camera_active or camera is None:
+        return False
+    
+    current_time = time.time()
+    
+    # Check if camera has been unresponsive for too long
+    if camera_last_frame_time > 0 and (current_time - camera_last_frame_time) > 5.0:
+        logger.warning("Camera appears frozen, attempting recovery...")
+        camera_failure_count += 1
+        
+        if camera_failure_count >= 3:
+            logger.error("Camera recovery failed multiple times, stopping camera")
+            release_camera()
+            return False
+        
+        # Attempt to recover camera
+        try:
+            camera.release()
+            time.sleep(0.5)
+            camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if camera.isOpened():
+                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                logger.info("Camera recovery successful")
+                camera_last_frame_time = current_time
+                return True
+            else:
+                logger.error("Camera recovery failed")
+                camera_active = False
+                return False
+        except Exception as e:
+            logger.error(f"Camera recovery error: {e}")
+            camera_active = False
+            return False
+    
+    return True
+
+async def generate_frames():
+    """Generate frames from the microscope camera with proper frame rate control and recovery."""
+    global camera, camera_active, camera_last_frame_time, camera_failure_count
+    
+    import asyncio
+    
+    # Target FPS for streaming (lower than camera FPS to prevent overload)
+    target_fps = 12
+    frame_delay = 1.0 / target_fps
+    consecutive_failures = 0
+    max_consecutive_failures = 5
+    
+    while camera_active and camera is not None:
+        try:
+            frame_start = time.time()
+            
+            # Check camera health periodically
+            if not check_camera_health():
+                break
+            
+            success, frame = camera.read()
+            if not success or frame is None:
+                consecutive_failures += 1
+                logger.warning(f"Failed to read frame from camera (attempt {consecutive_failures})")
+                
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error("Too many consecutive frame failures, stopping stream")
+                    break
+                
+                await asyncio.sleep(0.2)  # Wait before retrying
+                continue
+            
+            # Reset failure counter on successful frame
+            consecutive_failures = 0
+            camera_last_frame_time = time.time()
+            camera_failure_count = 0  # Reset recovery failure count
+            
+            # Apply any real-time processing if needed
+            processed_frame = frame.copy()
+            
+            # Optional: Add timestamp and status overlay
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            cv2.putText(processed_frame, f"Live Feed - {timestamp}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            
+            # Add frame counter for debugging
+            cv2.putText(processed_frame, f"FPS: {target_fps}", (10, processed_frame.shape[0] - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            
+            # Encode frame as JPEG with good compression
+            ret, buffer = cv2.imencode('.jpg', processed_frame, 
+                                     [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not ret:
+                await asyncio.sleep(0.01)
+                continue
+                
+            frame_bytes = buffer.tobytes()
+            
+            # Yield frame in multipart format
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
+            # Frame rate control - ensure we don't exceed target FPS
+            frame_time = time.time() - frame_start
+            if frame_time < frame_delay:
+                await asyncio.sleep(frame_delay - frame_time)
+                   
+        except Exception as e:
+            consecutive_failures += 1
+            logger.error(f"Error generating frame: {e}")
+            
+            if consecutive_failures >= max_consecutive_failures:
+                logger.error("Too many consecutive errors, stopping stream")
+                break
+                
+            await asyncio.sleep(0.2)  # Wait before retrying
+            continue
+    
+    logger.info("Frame generation stopped")
+    # Ensure camera is properly released
+    if camera is not None:
+        try:
+            camera.release()
+        except:
+            pass
+
+@app.get("/video_feed")
+async def video_feed():
+    """Video streaming route for live microscope feed."""
+    global camera, camera_active
+    
+    if not camera_active or camera is None:
+        raise HTTPException(status_code=503, detail="Camera not active. Please start camera first using /camera/start")
+    
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+@app.post("/camera/start")
+async def start_camera(camera_id: int = 0):
+    """Start the microscope camera."""
+    try:
+        if initialize_camera(camera_id):
+            return {
+                "status": "success",
+                "message": f"Camera {camera_id} started successfully",
+                "camera_active": True,
+                "camera_id": camera_id
+            }
+        else:
+            error_msg = f"Failed to start camera {camera_id}. Use /camera/detect to find available cameras."
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Error starting camera {camera_id}: {str(e)}"
+        logger.error(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/camera/stop")
+async def stop_camera():
+    """Stop the microscope camera."""
+    try:
+        release_camera()
+        return {
+            "status": "success",
+            "message": "Camera stopped successfully",
+            "camera_active": False
+        }
+    except Exception as e:
+        logger.error(f"Error stopping camera: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/camera/status")
+async def get_camera_status():
+    """Get camera status with detailed information."""
+    global camera, camera_active, camera_last_frame_time, camera_failure_count
+    
+    status = {
+        "camera_active": camera_active,
+        "camera_initialized": camera is not None,
+        "timestamp": datetime.now().isoformat(),
+        "failure_count": camera_failure_count
+    }
+    
+    if camera is not None and camera_active:
+        try:
+            # Get camera properties
+            width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = camera.get(cv2.CAP_PROP_FPS)
+            
+            status.update({
+                "resolution": f"{width}x{height}",
+                "fps": fps,
+                "last_frame_time": camera_last_frame_time,
+                "seconds_since_last_frame": time.time() - camera_last_frame_time if camera_last_frame_time > 0 else 0,
+                "health_status": "healthy" if camera_failure_count == 0 else "recovering"
+            })
+        except Exception as e:
+            status["error"] = f"Could not get camera properties: {e}"
+    
+    return status
+
+@app.get("/camera/detect")
+async def detect_cameras():
+    """Detect available cameras on the system (fast detection)."""
+    try:
+        available_cameras = []
+        
+        # Fast detection - only test cameras 0-2 with DirectShow
+        for camera_id in range(3):
+            try:
+                # Quick test with DirectShow only
+                test_cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
+                if test_cap.isOpened():
+                    # Quick frame test
+                    ret, frame = test_cap.read()
+                    if ret and frame is not None:
+                        # Get basic properties
+                        width = int(test_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        height = int(test_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        fps = test_cap.get(cv2.CAP_PROP_FPS)
+                        
+                        available_cameras.append({
+                            "camera_id": camera_id,
+                            "backend": cv2.CAP_DSHOW,
+                            "width": width,
+                            "height": height,
+                            "fps": fps,
+                            "working": True
+                        })
+                test_cap.release()
+                    
+            except Exception:
+                continue  # Skip failed cameras silently for speed
+        
+        return {
+            "status": "success",
+            "available_cameras": available_cameras,
+            "total_found": len(available_cameras),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error detecting cameras: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/camera/capture")
+async def capture_frame():
+    """Capture a single frame from the microscope camera."""
+    global camera, camera_active
+    
+    if not camera_active or camera is None:
+        raise HTTPException(status_code=503, detail="Camera not active")
+    
+    try:
+        success, frame = camera.read()
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to capture frame")
+        
+        # Encode frame as base64
+        frame_base64 = encode_image(frame)
+        
+        return {
+            "status": "success",
+            "image_data": frame_base64,
+            "timestamp": datetime.now().isoformat(),
+            "frame_size": {
+                "width": frame.shape[1],
+                "height": frame.shape[0]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error capturing frame: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/camera/predict_live")
+async def predict_live_frame():
+    """Capture frame and run prediction on it."""
+    global camera, camera_active, detector
+    
+    if not camera_active or camera is None:
+        raise HTTPException(status_code=503, detail="Camera not active")
+    
+    try:
+        success, frame = camera.read()
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to capture frame")
+        
+        # Temporarily lower confidence threshold for live predictions to be more sensitive
+        original_confidence = None
+        if detector:
+            original_confidence = detector.confidence_threshold
+            detector.confidence_threshold = 0.3  # Lower threshold for live detection
+        
+        try:
+            # Encode frame as base64 for prediction
+            frame_base64 = encode_image(frame)
+            
+            # Create prediction request
+            prediction_request = PredictionRequest(
+                image_data=frame_base64,
+                image_format="jpg"
+            )
+            
+            # Run prediction using existing predict_image function with allow_no_specimens=True
+            result = await predict_image(prediction_request, allow_no_specimens=True)
+            
+        finally:
+            # Restore original confidence threshold
+            if detector and original_confidence is not None:
+                detector.confidence_threshold = original_confidence
+        
+        # Check if no specimens were detected
+        if isinstance(result, dict) and result.get("status") == "no_specimens":
+            logger.info("Live prediction: No specimens detected in current frame")
+            return {
+                "status": "no_specimens",
+                "message": "No specimens detected in current frame",
+                "capture_timestamp": datetime.now().isoformat(),
+                "processing_time": result.get("processing_time", 0)
+            }
+        
+        logger.info(f"Live prediction successful: specimen_id={result.specimen_id if hasattr(result, 'specimen_id') else 'unknown'}")
+        return {
+            "status": "success",
+            "prediction": result,
+            "capture_timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"Error in live prediction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/camera/detector_info")
+async def get_detector_info():
+    """Get information about the current detector configuration."""
+    global detector
+    
+    if not detector:
+        return {
+            "status": "error",
+            "message": "Detector not initialized"
+        }
+    
+    return {
+        "status": "success",
+        "detector_info": {
+            "confidence_threshold": detector.confidence_threshold,
+            "nms_threshold": detector.nms_threshold,
+            "max_detections": detector.max_detections,
+            "device": detector.device,
+            "model_loaded": detector.model is not None,
+            "tracker_objects": len(detector.tracker.objects) if detector.tracker else 0
+        }
+    }
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -803,6 +1382,10 @@ async def health_check():
             "detector": detector is not None,
             "classifier": classifier is not None and getattr(classifier, 'is_trained', False),
             "regression": regression_model is not None
+        },
+        "camera_status": {
+            "active": camera_active,
+            "initialized": camera is not None
         }
     }
 

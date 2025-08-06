@@ -10,15 +10,28 @@ class MLMCSCInterface {
         this.currentImageData = null;
         this.technicianId = this.getTechnicianId();
         
+        // Live microscope properties
+        this.cameraActive = false;
+        this.autoPredictionEnabled = false;
+        this.autoPredictionInterval = null;
+        this.predictionIntervalSeconds = 3;
+        
         this.initializeEventListeners();
+        this.initializeLiveMicroscope();
         this.loadMetrics();
         this.loadHistory();
+        this.checkCameraStatus();
         
         // Auto-refresh metrics and history every 30 seconds
         setInterval(() => {
             this.loadMetrics();
             this.loadHistory();
         }, 30000);
+        
+        // Check camera status every 10 seconds
+        setInterval(() => {
+            this.checkCameraStatus();
+        }, 10000);
     }
     
     getTechnicianId() {
@@ -93,8 +106,461 @@ class MLMCSCInterface {
         if (exportHistory) {
             exportHistory.addEventListener('click', () => this.exportHistory());
         }
+        
+        // Live microscope event listeners
+        this.initializeLiveMicroscopeListeners();
     }
     
+    initializeLiveMicroscopeListeners() {
+        // Camera control buttons
+        const startCamera = document.getElementById('startCamera');
+        const stopCamera = document.getElementById('stopCamera');
+        const captureFrame = document.getElementById('captureFrame');
+        const predictLive = document.getElementById('predictLive');
+        
+        if (startCamera) {
+            startCamera.addEventListener('click', () => this.startCamera());
+        }
+        
+        if (stopCamera) {
+            stopCamera.addEventListener('click', () => this.stopCamera());
+        }
+        
+        if (captureFrame) {
+            captureFrame.addEventListener('click', () => this.captureFrame());
+        }
+        
+        if (predictLive) {
+            predictLive.addEventListener('click', () => this.predictLiveFrame());
+        }
+        
+        // Detect cameras button
+        const detectCameras = document.getElementById('detectCameras');
+        if (detectCameras) {
+            detectCameras.addEventListener('click', () => this.detectAvailableCameras());
+        }
+        
+        // Auto prediction toggle
+        const autoPrediction = document.getElementById('autoPrediction');
+        if (autoPrediction) {
+            autoPrediction.addEventListener('change', (e) => {
+                this.toggleAutoPrediction(e.target.checked);
+            });
+        }
+        
+        // Prediction interval slider
+        const predictionInterval = document.getElementById('predictionInterval');
+        const intervalValue = document.getElementById('intervalValue');
+        if (predictionInterval && intervalValue) {
+            predictionInterval.addEventListener('input', (e) => {
+                this.predictionIntervalSeconds = parseInt(e.target.value);
+                intervalValue.textContent = `${e.target.value}s`;
+                
+                // Restart auto prediction if active
+                if (this.autoPredictionEnabled) {
+                    this.stopAutoPrediction();
+                    this.startAutoPrediction();
+                }
+            });
+        }
+    }
+    
+    // Live Microscope Methods
+    
+    initializeLiveMicroscope() {
+        // Initialize video feed element
+        const videoFeed = document.getElementById('videoFeed');
+        if (videoFeed) {
+            videoFeed.onerror = () => {
+                console.error('Video feed error');
+                this.updateCameraStatus(false);
+            };
+        }
+    }
+    
+    async checkCameraStatus() {
+        try {
+            const response = await fetch('/camera/status');
+            if (response.ok) {
+                const status = await response.json();
+                this.updateCameraStatus(status.camera_active);
+            }
+        } catch (error) {
+            console.error('Error checking camera status:', error);
+            this.updateCameraStatus(false);
+        }
+    }
+    
+    updateCameraStatus(isActive) {
+        this.cameraActive = isActive;
+        
+        const cameraStatus = document.getElementById('cameraStatus');
+        const videoFeed = document.getElementById('videoFeed');
+        const videoOverlay = document.getElementById('videoOverlay');
+        const videoPlaceholder = document.getElementById('videoPlaceholder');
+        const startCamera = document.getElementById('startCamera');
+        const stopCamera = document.getElementById('stopCamera');
+        const captureFrame = document.getElementById('captureFrame');
+        const predictLive = document.getElementById('predictLive');
+        
+        if (isActive) {
+            // Camera is active
+            cameraStatus.className = 'camera-status camera-active';
+            cameraStatus.innerHTML = '<i class="fas fa-video me-2"></i>Camera Active';
+            
+            // Show video feed
+            if (videoFeed) {
+                videoFeed.src = '/video_feed?' + new Date().getTime(); // Add timestamp to prevent caching
+                videoFeed.style.display = 'block';
+            }
+            if (videoOverlay) videoOverlay.style.display = 'block';
+            if (videoPlaceholder) videoPlaceholder.style.display = 'none';
+            
+            // Update button visibility
+            if (startCamera) startCamera.style.display = 'none';
+            if (stopCamera) stopCamera.style.display = 'inline-block';
+            if (captureFrame) captureFrame.style.display = 'inline-block';
+            if (predictLive) predictLive.style.display = 'inline-block';
+        } else {
+            // Camera is inactive
+            cameraStatus.className = 'camera-status camera-inactive';
+            cameraStatus.innerHTML = '<i class="fas fa-video-slash me-2"></i>Camera Inactive';
+            
+            // Hide video feed
+            if (videoFeed) {
+                videoFeed.style.display = 'none';
+                videoFeed.src = '';
+            }
+            if (videoOverlay) videoOverlay.style.display = 'none';
+            if (videoPlaceholder) videoPlaceholder.style.display = 'block';
+            
+            // Update button visibility
+            if (startCamera) startCamera.style.display = 'inline-block';
+            if (stopCamera) stopCamera.style.display = 'none';
+            if (captureFrame) captureFrame.style.display = 'none';
+            if (predictLive) predictLive.style.display = 'none';
+            
+            // Stop auto prediction if active
+            this.stopAutoPrediction();
+        }
+    }
+    
+    async detectAvailableCameras() {
+        try {
+            this.showLoading('Detecting available cameras...');
+            
+            const response = await fetch('/camera/detect');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                const cameras = result.available_cameras;
+                
+                if (cameras.length === 0) {
+                    alert('No cameras detected on the system.\n\nPlease check:\n• Camera is connected\n• Camera drivers are installed\n• Camera is not being used by another application');
+                } else {
+                    // Update camera dropdown with detected cameras
+                    const cameraSelect = document.getElementById('cameraId');
+                    cameraSelect.innerHTML = '';
+                    
+                    cameras.forEach(cam => {
+                        const option = document.createElement('option');
+                        option.value = cam.camera_id;
+                        option.textContent = `Camera ${cam.camera_id} (${cam.width}x${cam.height})`;
+                        cameraSelect.appendChild(option);
+                    });
+                    
+                    // Show success message
+                    const cameraList = cameras.map(cam => 
+                        `Camera ${cam.camera_id}: ${cam.width}x${cam.height} @ ${cam.fps.toFixed(1)}fps`
+                    ).join('\n');
+                    
+                    alert(`Found ${cameras.length} working camera(s):\n\n${cameraList}\n\nCamera dropdown has been updated.`);
+                }
+            } else {
+                throw new Error(result.message || 'Failed to detect cameras');
+            }
+            
+        } catch (error) {
+            console.error('Error detecting cameras:', error);
+            alert(`Error detecting cameras: ${error.message}`);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    async startCamera() {
+        try {
+            const cameraId = document.getElementById('cameraId').value;
+            this.showLoading('Starting camera...');
+            
+            const response = await fetch(`/camera/start?camera_id=${parseInt(cameraId)}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok && result.status === 'success') {
+                this.updateCameraStatus(true);
+                // Small delay to ensure camera is ready
+                setTimeout(() => {
+                    this.checkCameraStatus();
+                }, 1000);
+                
+                // Show success message
+                alert(`Camera ${cameraId} started successfully!`);
+            } else {
+                // Show detailed error message from server
+                const errorMsg = result.detail || result.message || 'Failed to start camera';
+                throw new Error(errorMsg);
+            }
+            
+        } catch (error) {
+            console.error('Error starting camera:', error);
+            
+            // Show user-friendly error message with suggestions
+            let userMessage = `Failed to start camera: ${error.message}\n\n`;
+            userMessage += 'Troubleshooting tips:\n';
+            userMessage += '• Try clicking "Detect Available Cameras" first\n';
+            userMessage += '• Make sure no other applications are using the camera\n';
+            userMessage += '• Try different camera IDs (0, 1, 2, etc.)\n';
+            userMessage += '• Check camera connections and drivers\n';
+            userMessage += '• Restart the browser if needed';
+            
+            alert(userMessage);
+            this.updateCameraStatus(false);
+        } finally {
+            this.hideLoading();
+        }
+    }
+    
+    async stopCamera() {
+        try {
+            this.showLoading('Stopping camera...');
+            
+            const response = await fetch('/camera/stop', {
+                method: 'POST'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                this.updateCameraStatus(false);
+            } else {
+                throw new Error(result.message || 'Failed to stop camera');
+            }
+            
+        } catch (error) {
+            console.error('Error stopping camera:', error);
+            alert(`Error stopping camera: ${error.message}`);
+        } finally {
+            this.hideLoading();
+        }
+    }
+    
+    async captureFrame() {
+        try {
+            this.showLoading('Capturing frame...');
+            
+            const response = await fetch('/camera/capture', {
+                method: 'POST'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                // Create a temporary image element to display the captured frame
+                const modal = document.createElement('div');
+                modal.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0,0,0,0.8);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    z-index: 10000;
+                `;
+                
+                modal.innerHTML = `
+                    <div style="background: white; padding: 20px; border-radius: 10px; max-width: 90%; max-height: 90%; overflow: auto;">
+                        <h5>Captured Frame</h5>
+                        <img src="${result.image_data}" style="max-width: 100%; height: auto; border-radius: 5px;">
+                        <div style="text-align: center; margin-top: 15px;">
+                            <button class="btn btn-primary me-2" onclick="this.parentElement.parentElement.parentElement.remove()">Close</button>
+                            <button class="btn btn-success" onclick="mlmcscInterface.useFrameForPrediction('${result.image_data}'); this.parentElement.parentElement.parentElement.remove();">Use for Prediction</button>
+                        </div>
+                        <small class="text-muted d-block mt-2">Captured: ${new Date(result.timestamp).toLocaleString()}</small>
+                    </div>
+                `;
+                
+                document.body.appendChild(modal);
+                
+                // Close modal when clicking outside
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        modal.remove();
+                    }
+                });
+                
+            } else {
+                throw new Error(result.message || 'Failed to capture frame');
+            }
+            
+        } catch (error) {
+            console.error('Error capturing frame:', error);
+            alert(`Error capturing frame: ${error.message}`);
+        } finally {
+            this.hideLoading();
+        }
+    }
+    
+    async useFrameForPrediction(imageData) {
+        // Use captured frame for prediction in the main interface
+        this.currentImageData = imageData;
+        
+        try {
+            this.showLoading('Analyzing captured frame...');
+            
+            const response = await fetch('/predict', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    image_data: imageData,
+                    image_format: 'jpg'
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const prediction = await response.json();
+            this.displayPrediction(prediction);
+            
+        } catch (error) {
+            console.error('Error analyzing captured frame:', error);
+            alert(`Error analyzing frame: ${error.message}`);
+        } finally {
+            this.hideLoading();
+        }
+    }
+    
+    async predictLiveFrame() {
+        try {
+            this.showLoading('Running live prediction...');
+            
+            const response = await fetch('/camera/predict_live', {
+                method: 'POST'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                this.displayLivePrediction(result.prediction);
+            } else {
+                throw new Error(result.message || 'Failed to run live prediction');
+            }
+            
+        } catch (error) {
+            console.error('Error in live prediction:', error);
+            alert(`Error in live prediction: ${error.message}`);
+        } finally {
+            this.hideLoading();
+        }
+    }
+    
+    displayLivePrediction(prediction) {
+        const livePredictionValue = document.getElementById('livePredictionValue');
+        const livePredictionConfidence = document.getElementById('livePredictionConfidence');
+        const liveSpecimenId = document.getElementById('liveSpecimenId');
+        const livePredictionTime = document.getElementById('livePredictionTime');
+        
+        if (livePredictionValue) {
+            livePredictionValue.textContent = `${prediction.shear_percentage.toFixed(1)}%`;
+        }
+        
+        if (livePredictionConfidence) {
+            const confidencePercent = (prediction.confidence * 100).toFixed(1);
+            livePredictionConfidence.textContent = `${confidencePercent}%`;
+            
+            // Update confidence color
+            if (prediction.confidence >= 0.8) {
+                livePredictionConfidence.className = 'fs-6 text-success';
+            } else if (prediction.confidence >= 0.6) {
+                livePredictionConfidence.className = 'fs-6 text-warning';
+            } else {
+                livePredictionConfidence.className = 'fs-6 text-danger';
+            }
+        }
+        
+        if (liveSpecimenId) {
+            liveSpecimenId.textContent = prediction.specimen_id;
+        }
+        
+        if (livePredictionTime) {
+            livePredictionTime.textContent = `Last prediction: ${new Date().toLocaleTimeString()}`;
+        }
+    }
+    
+    toggleAutoPrediction(enabled) {
+        this.autoPredictionEnabled = enabled;
+        
+        if (enabled && this.cameraActive) {
+            this.startAutoPrediction();
+        } else {
+            this.stopAutoPrediction();
+        }
+    }
+    
+    startAutoPrediction() {
+        if (this.autoPredictionInterval) {
+            clearInterval(this.autoPredictionInterval);
+        }
+        
+        this.autoPredictionInterval = setInterval(() => {
+            if (this.cameraActive && this.autoPredictionEnabled) {
+                this.predictLiveFrame();
+            }
+        }, this.predictionIntervalSeconds * 1000);
+    }
+    
+    stopAutoPrediction() {
+        if (this.autoPredictionInterval) {
+            clearInterval(this.autoPredictionInterval);
+            this.autoPredictionInterval = null;
+        }
+        
+        // Update checkbox state
+        const autoPrediction = document.getElementById('autoPrediction');
+        if (autoPrediction) {
+            autoPrediction.checked = false;
+        }
+        this.autoPredictionEnabled = false;
+    }
+
     async handleImageUpload(file) {
         try {
             // Validate file type
